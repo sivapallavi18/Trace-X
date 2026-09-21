@@ -1,11 +1,33 @@
 import "dotenv/config"
 
 import express, {
+  type NextFunction,
   type Request,
   type Response,
 } from "express"
 
 import cors from "cors"
+import multer from "multer"
+
+import {
+  createHash,
+  randomUUID,
+} from "node:crypto"
+
+import {
+  createReadStream,
+} from "node:fs"
+
+import {
+  mkdir,
+  stat,
+  unlink,
+} from "node:fs/promises"
+
+import {
+  basename,
+  resolve,
+} from "node:path"
 
 import {
   database,
@@ -32,6 +54,44 @@ const PORT =
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN ||
   "http://localhost:5173"
+
+/*
+ * For this student/local-development version we allow files
+ * up to 1 GB.
+ *
+ * Multer writes directly to disk, so the whole upload is not
+ * held in RAM.
+ */
+const MAX_EVIDENCE_FILE_SIZE =
+  1024 *
+  1024 *
+  1024
+
+/* =========================================================
+   LOCAL OFF-CHAIN STORAGE
+========================================================= */
+
+const STORAGE_ROOT =
+  resolve(
+    process.cwd(),
+    "storage",
+  )
+
+const EVIDENCE_STORAGE_DIRECTORY =
+  resolve(
+    STORAGE_ROOT,
+    "evidence",
+  )
+
+async function ensureEvidenceStorage() {
+  await mkdir(
+    EVIDENCE_STORAGE_DIRECTORY,
+    {
+      recursive:
+        true,
+    },
+  )
+}
 
 /* =========================================================
    TYPES
@@ -143,6 +203,16 @@ type EvidenceRow = {
     EvidenceVersion[]
 }
 
+type StoredEvidenceRow = {
+  id: string
+  hash: string
+  storage_key:
+    | string
+    | null
+  storage_provider:
+    string
+}
+
 /* =========================================================
    VALID VALUES
 ========================================================= */
@@ -165,6 +235,55 @@ const VALID_EVIDENCE_TYPES:
     "Video",
     "Other",
   ]
+
+/* =========================================================
+   MULTER FILE STORAGE
+========================================================= */
+
+const multerStorage =
+  multer.diskStorage({
+    destination: (
+      _request,
+      _file,
+      callback,
+    ) => {
+      callback(
+        null,
+        EVIDENCE_STORAGE_DIRECTORY,
+      )
+    },
+
+    filename: (
+      _request,
+      _file,
+      callback,
+    ) => {
+      /*
+       * Never trust the filename supplied by the user's
+       * computer as a filesystem path.
+       *
+       * TRACE-X generates an opaque storage identifier.
+       */
+      callback(
+        null,
+        randomUUID(),
+      )
+    },
+  })
+
+const upload =
+  multer({
+    storage:
+      multerStorage,
+
+    limits: {
+      fileSize:
+        MAX_EVIDENCE_FILE_SIZE,
+
+      files:
+        1,
+    },
+  })
 
 /* =========================================================
    MIDDLEWARE
@@ -327,6 +446,141 @@ function sendServerError(
       message:
         "An internal TRACE-X server error occurred.",
     })
+}
+
+/* =========================================================
+   SHA-256 FILE HASHING
+
+   This reads the file as a stream instead of loading the
+   complete file into RAM.
+========================================================= */
+
+function calculateFileSHA256(
+  filePath: string,
+): Promise<string> {
+  return new Promise(
+    (
+      resolveHash,
+      rejectHash,
+    ) => {
+      const hash =
+        createHash(
+          "sha256",
+        )
+
+      const stream =
+        createReadStream(
+          filePath,
+        )
+
+      stream.on(
+        "data",
+        (chunk) => {
+          hash.update(
+            chunk,
+          )
+        },
+      )
+
+      stream.on(
+        "error",
+        (error) => {
+          rejectHash(
+            error,
+          )
+        },
+      )
+
+      stream.on(
+        "end",
+        () => {
+          resolveHash(
+            hash.digest(
+              "hex",
+            ),
+          )
+        },
+      )
+    },
+  )
+}
+
+/* =========================================================
+   SAFE STORAGE PATH RESOLUTION
+========================================================= */
+
+function resolveStoredEvidencePath(
+  storageKey: string,
+) {
+  /*
+   * A valid local storage key must only be a filename,
+   * never a path such as ../../something.
+   */
+  if (
+    basename(
+      storageKey,
+    ) !== storageKey
+  ) {
+    throw new Error(
+      "Invalid evidence storage key.",
+    )
+  }
+
+  const resolvedPath =
+    resolve(
+      EVIDENCE_STORAGE_DIRECTORY,
+      storageKey,
+    )
+
+  const normalizedStorageRoot =
+    EVIDENCE_STORAGE_DIRECTORY
+      .toLowerCase()
+
+  const normalizedFilePath =
+    resolvedPath
+      .toLowerCase()
+
+  if (
+    !normalizedFilePath.startsWith(
+      `${normalizedStorageRoot}\\`,
+    ) &&
+    normalizedFilePath !==
+      normalizedStorageRoot
+  ) {
+    throw new Error(
+      "Evidence path escaped the storage directory.",
+    )
+  }
+
+  return resolvedPath
+}
+
+/* =========================================================
+   CLEANUP
+========================================================= */
+
+async function removeFileSafely(
+  filePath: string,
+) {
+  try {
+    await unlink(
+      filePath,
+    )
+  } catch (error) {
+    const nodeError =
+      error as
+        NodeJS.ErrnoException
+
+    if (
+      nodeError.code !==
+      "ENOENT"
+    ) {
+      console.error(
+        "Could not remove temporary evidence file:",
+        error,
+      )
+    }
+  }
 }
 
 /* =========================================================
@@ -578,7 +832,7 @@ async function fetchEvidenceById(
 }
 
 /* =========================================================
-   ROOT ROUTE
+   ROOT
 ========================================================= */
 
 app.get(
@@ -600,14 +854,17 @@ app.get(
       status:
         "running",
 
-      storage:
+      database:
         "PostgreSQL",
+
+      evidenceStorage:
+        "Local off-chain storage",
     })
   },
 )
 
 /* =========================================================
-   HEALTH CHECK
+   HEALTH
 ========================================================= */
 
 app.get(
@@ -622,6 +879,10 @@ app.get(
     try {
       const databaseInfo =
         await testDatabaseConnection()
+
+      await stat(
+        EVIDENCE_STORAGE_DIRECTORY,
+      )
 
       response
         .status(200)
@@ -649,6 +910,14 @@ app.get(
               databaseInfo.server_time,
           },
 
+          storage: {
+            provider:
+              "local",
+
+            ready:
+              true,
+          },
+
           timestamp:
             new Date().toISOString(),
 
@@ -658,7 +927,7 @@ app.get(
         })
     } catch (error) {
       console.error(
-        "Database health check failed:",
+        "TRACE-X health check failed:",
         error,
       )
 
@@ -672,15 +941,10 @@ app.get(
             "TRACE-X API",
 
           status:
-            "database_unavailable",
-
-          database: {
-            connected:
-              false,
-          },
+            "dependency_unavailable",
 
           message:
-            "TRACE-X could not connect to PostgreSQL.",
+            "TRACE-X database or evidence storage is unavailable.",
         })
     }
   },
@@ -689,10 +953,6 @@ app.get(
 /* =========================================================
    CASE ROUTES
 ========================================================= */
-
-/* ---------------------------------------------------------
-   GET ALL CASES
---------------------------------------------------------- */
 
 app.get(
   "/api/cases",
@@ -725,10 +985,6 @@ app.get(
     }
   },
 )
-
-/* ---------------------------------------------------------
-   GET ONE CASE
---------------------------------------------------------- */
 
 app.get(
   "/api/cases/:id",
@@ -776,10 +1032,6 @@ app.get(
     }
   },
 )
-
-/* ---------------------------------------------------------
-   CREATE CASE
---------------------------------------------------------- */
 
 app.post(
   "/api/cases",
@@ -882,14 +1134,11 @@ app.post(
           ],
         )
 
-      const newCaseId =
-        insertResult
-          .rows[0]
-          .id
-
       const newCase =
         await fetchCaseById(
-          newCaseId,
+          insertResult
+            .rows[0]
+            .id,
         )
 
       response
@@ -916,10 +1165,6 @@ app.post(
 /* =========================================================
    EVIDENCE ROUTES
 ========================================================= */
-
-/* ---------------------------------------------------------
-   GET ALL EVIDENCE
---------------------------------------------------------- */
 
 app.get(
   "/api/evidence",
@@ -952,10 +1197,6 @@ app.get(
     }
   },
 )
-
-/* ---------------------------------------------------------
-   GET ONE EVIDENCE RECORD
---------------------------------------------------------- */
 
 app.get(
   "/api/evidence/:id",
@@ -1002,9 +1243,12 @@ app.get(
   },
 )
 
-/* ---------------------------------------------------------
-   REGISTER EVIDENCE
---------------------------------------------------------- */
+/* =========================================================
+   LEGACY METADATA-ONLY EVIDENCE REGISTRATION
+
+   We keep this temporarily so your existing React frontend
+   continues to work before we change it to real file upload.
+========================================================= */
 
 app.post(
   "/api/evidence",
@@ -1029,10 +1273,6 @@ app.post(
         custodian,
       } =
         request.body
-
-      /* ---------------------------------------------------
-         VALIDATION
-      --------------------------------------------------- */
 
       if (
         typeof name !==
@@ -1115,9 +1355,7 @@ app.post(
           `
             SELECT
               id
-
             FROM cases
-
             WHERE
               id = $1
           `,
@@ -1161,10 +1399,6 @@ app.post(
       const normalizedHash =
         hash.toLowerCase()
 
-      /* ---------------------------------------------------
-         TRANSACTION
-      --------------------------------------------------- */
-
       await client.query(
         "BEGIN",
       )
@@ -1183,7 +1417,8 @@ app.post(
               hash,
               custodian,
               integrity,
-              status
+              status,
+              storage_provider
             )
 
             VALUES (
@@ -1195,7 +1430,8 @@ app.post(
               $6,
               $7,
               'Verified',
-              'Registered'
+              'Registered',
+              'metadata-only'
             )
 
             RETURNING
@@ -1280,7 +1516,7 @@ app.post(
             true,
 
           message:
-            "Evidence registered successfully.",
+            "Evidence metadata registered successfully.",
 
           data:
             newEvidence,
@@ -1291,7 +1527,7 @@ app.post(
           "ROLLBACK",
         )
       } catch {
-        // Ignore rollback failure.
+        // Ignore rollback errors.
       }
 
       sendServerError(
@@ -1300,6 +1536,541 @@ app.post(
       )
     } finally {
       client.release()
+    }
+  },
+)
+
+/* =========================================================
+   REAL FILE UPLOAD
+
+   multipart/form-data fields:
+
+   file
+   caseId
+   description
+   type
+   custodian
+========================================================= */
+
+app.post(
+  "/api/evidence/upload",
+
+  upload.single(
+    "file",
+  ),
+
+  async (
+    request:
+      Request,
+
+    response:
+      Response,
+  ) => {
+    const uploadedFile =
+      request.file
+
+    let preserveUploadedFile =
+      false
+
+    try {
+      if (
+        !uploadedFile
+      ) {
+        response
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "An evidence file is required.",
+          })
+
+        return
+      }
+
+      const {
+        caseId,
+        description,
+        type,
+        custodian,
+      } =
+        request.body
+
+      if (
+        typeof caseId !==
+          "string" ||
+        !caseId.trim()
+      ) {
+        response
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Case ID is required.",
+          })
+
+        return
+      }
+
+      if (
+        typeof custodian !==
+          "string" ||
+        !custodian.trim()
+      ) {
+        response
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Custodian is required.",
+          })
+
+        return
+      }
+
+      const selectedType:
+        EvidenceType =
+          VALID_EVIDENCE_TYPES.includes(
+            type,
+          )
+            ? type
+            : "Other"
+
+      const caseResult =
+        await database.query<{
+          id: string
+        }>(
+          `
+            SELECT
+              id
+
+            FROM cases
+
+            WHERE
+              id = $1
+          `,
+          [
+            caseId,
+          ],
+        )
+
+      if (
+        caseResult.rows.length ===
+        0
+      ) {
+        response
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Associated case was not found.",
+          })
+
+        return
+      }
+
+      /*
+       * This hash is calculated by the backend from the
+       * exact bytes that were written to off-chain storage.
+       */
+      const calculatedHash =
+        await calculateFileSHA256(
+          uploadedFile.path,
+        )
+
+      const client =
+        await database.connect()
+
+      let databaseCommitted =
+        false
+
+      let evidenceId =
+        ""
+
+      try {
+        await client.query(
+          "BEGIN",
+        )
+
+        const insertResult =
+          await client.query<{
+            id: string
+          }>(
+            `
+              INSERT INTO evidence (
+                name,
+                description,
+                case_id,
+                type,
+                size,
+                hash,
+                custodian,
+                integrity,
+                status,
+                storage_key,
+                storage_provider,
+                mime_type
+              )
+
+              VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                'Verified',
+                'Registered',
+                $8,
+                'local',
+                $9
+              )
+
+              RETURNING
+                id
+            `,
+            [
+              uploadedFile.originalname,
+
+              typeof description ===
+                "string" &&
+              description.trim()
+                ? description.trim()
+                : "No evidence description has been provided.",
+
+              caseId,
+
+              selectedType,
+
+              uploadedFile.size,
+
+              calculatedHash,
+
+              custodian.trim(),
+
+              uploadedFile.filename,
+
+              uploadedFile.mimetype ||
+                null,
+            ],
+          )
+
+        evidenceId =
+          insertResult
+            .rows[0]
+            .id
+
+        await client.query(
+          `
+            INSERT INTO evidence_versions (
+              evidence_id,
+              version,
+              hash,
+              note
+            )
+
+            VALUES (
+              $1,
+              1,
+              $2,
+              'Original evidence acquisition'
+            )
+          `,
+          [
+            evidenceId,
+            calculatedHash,
+          ],
+        )
+
+        await client.query(
+          `
+            UPDATE cases
+
+            SET
+              updated_at = NOW()
+
+            WHERE
+              id = $1
+          `,
+          [
+            caseId,
+          ],
+        )
+
+        await client.query(
+          "COMMIT",
+        )
+
+        databaseCommitted =
+          true
+
+        preserveUploadedFile =
+          true
+      } catch (error) {
+        try {
+          await client.query(
+            "ROLLBACK",
+          )
+        } catch {
+          // Ignore rollback errors.
+        }
+
+        throw error
+      } finally {
+        client.release()
+      }
+
+      if (
+        !databaseCommitted
+      ) {
+        throw new Error(
+          "Evidence transaction was not committed.",
+        )
+      }
+
+      const newEvidence =
+        await fetchEvidenceById(
+          evidenceId,
+        )
+
+      response
+        .status(201)
+        .json({
+          success:
+            true,
+
+          message:
+            "Evidence file stored and registered successfully.",
+
+          hashSource:
+            "server",
+
+          storageProvider:
+            "local",
+
+          data:
+            newEvidence,
+        })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
+    } finally {
+      if (
+        uploadedFile &&
+        !preserveUploadedFile
+      ) {
+        await removeFileSafely(
+          uploadedFile.path,
+        )
+      }
+    }
+  },
+)
+
+/* =========================================================
+   VERIFY STORED EVIDENCE
+
+   Recalculates SHA-256 from the currently stored bytes and
+   compares it with the original SHA-256 recorded in the DB.
+========================================================= */
+
+app.post(
+  "/api/evidence/:id/verify",
+
+  async (
+    request:
+      Request,
+
+    response:
+      Response,
+  ) => {
+    try {
+      const evidenceResult =
+        await database.query<StoredEvidenceRow>(
+          `
+            SELECT
+              id,
+              hash,
+              storage_key,
+              storage_provider
+
+            FROM evidence
+
+            WHERE
+              id = $1
+          `,
+          [
+            request.params.id,
+          ],
+        )
+
+      if (
+        evidenceResult.rows.length ===
+        0
+      ) {
+        response
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Evidence record not found.",
+          })
+
+        return
+      }
+
+      const record =
+        evidenceResult
+          .rows[0]
+
+      if (
+        !record.storage_key ||
+        record.storage_provider !==
+          "local"
+      ) {
+        response
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "This evidence record does not have a locally stored evidence file. Older metadata-only records cannot be rehashed.",
+          })
+
+        return
+      }
+
+      const storedPath =
+        resolveStoredEvidencePath(
+          record.storage_key,
+        )
+
+      try {
+        await stat(
+          storedPath,
+        )
+      } catch (error) {
+        const nodeError =
+          error as
+            NodeJS.ErrnoException
+
+        if (
+          nodeError.code ===
+          "ENOENT"
+        ) {
+          await database.query(
+            `
+              UPDATE evidence
+
+              SET
+                integrity = 'Mismatch',
+                updated_at = NOW()
+
+              WHERE
+                id = $1
+            `,
+            [
+              record.id,
+            ],
+          )
+
+          response
+            .status(410)
+            .json({
+              success:
+                false,
+
+              verified:
+                false,
+
+              integrity:
+                "Mismatch",
+
+              message:
+                "The stored evidence file is missing.",
+            })
+
+          return
+        }
+
+        throw error
+      }
+
+      const currentHash =
+        await calculateFileSHA256(
+          storedPath,
+        )
+
+      const matches =
+        currentHash ===
+        record.hash
+
+      const integrity:
+        EvidenceIntegrity =
+          matches
+            ? "Verified"
+            : "Mismatch"
+
+      await database.query(
+        `
+          UPDATE evidence
+
+          SET
+            integrity = $1,
+            updated_at = NOW()
+
+          WHERE
+            id = $2
+        `,
+        [
+          integrity,
+          record.id,
+        ],
+      )
+
+      response.json({
+        success:
+          true,
+
+        verified:
+          matches,
+
+        integrity,
+
+        evidenceId:
+          record.id,
+
+        algorithm:
+          "SHA-256",
+
+        expectedHash:
+          record.hash,
+
+        currentHash,
+
+        message:
+          matches
+            ? "Evidence integrity verified successfully."
+            : "Evidence integrity mismatch detected.",
+      })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
     }
   },
 )
@@ -1322,10 +2093,13 @@ app.get(
         "TRACE-X",
 
       version:
-        "0.3.0",
+        "0.4.0",
 
-      storage:
+      database:
         "PostgreSQL",
+
+      evidenceStorage:
+        "Local off-chain storage",
 
       endpoints: {
         health:
@@ -1346,15 +2120,21 @@ app.get(
         evidenceById:
           "GET /api/evidence/:id",
 
-        registerEvidence:
+        metadataOnlyEvidence:
           "POST /api/evidence",
+
+        uploadEvidenceFile:
+          "POST /api/evidence/upload",
+
+        verifyStoredEvidence:
+          "POST /api/evidence/:id/verify",
       },
     })
   },
 )
 
 /* =========================================================
-   404 HANDLER
+   404
 ========================================================= */
 
 app.use(
@@ -1376,6 +2156,75 @@ app.use(
 
         path:
           request.originalUrl,
+      })
+  },
+)
+
+/* =========================================================
+   ERROR HANDLER
+========================================================= */
+
+app.use(
+  (
+    error:
+      unknown,
+
+    _request:
+      Request,
+
+    response:
+      Response,
+
+    _next:
+      NextFunction,
+  ) => {
+    if (
+      error instanceof
+      multer.MulterError
+    ) {
+      if (
+        error.code ===
+        "LIMIT_FILE_SIZE"
+      ) {
+        response
+          .status(413)
+          .json({
+            success:
+              false,
+
+            message:
+              "Evidence file exceeds the 1 GB local-development upload limit.",
+          })
+
+        return
+      }
+
+      response
+        .status(400)
+        .json({
+          success:
+            false,
+
+          message:
+            `Evidence upload failed: ${error.message}`,
+        })
+
+      return
+    }
+
+    console.error(
+      "Unhandled TRACE-X error:",
+      error,
+    )
+
+    response
+      .status(500)
+      .json({
+        success:
+          false,
+
+        message:
+          "An unexpected TRACE-X server error occurred.",
       })
   },
 )
@@ -1420,6 +2269,20 @@ async function startServer() {
     )
 
     console.log(
+      "Preparing off-chain evidence storage...",
+    )
+
+    await ensureEvidenceStorage()
+
+    console.log(
+      "Evidence storage: READY",
+    )
+
+    console.log(
+      `Storage directory: ${EVIDENCE_STORAGE_DIRECTORY}`,
+    )
+
+    console.log(
       "--------------------------------------",
     )
 
@@ -1435,7 +2298,11 @@ async function startServer() {
         )
 
         console.log(
-          "Storage: PostgreSQL",
+          "Database: PostgreSQL",
+        )
+
+        console.log(
+          "Evidence storage: Local off-chain",
         )
 
         console.log(
@@ -1458,7 +2325,7 @@ async function startServer() {
     )
 
     console.error(
-      "TRACE-X could not initialize PostgreSQL.",
+      "TRACE-X could not initialize its dependencies.",
     )
 
     console.error("")
@@ -1470,7 +2337,7 @@ async function startServer() {
     console.error("")
 
     console.error(
-      "Check that PostgreSQL is running and verify server/.env.",
+      "Check PostgreSQL and server/.env.",
     )
 
     console.error(

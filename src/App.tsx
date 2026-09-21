@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type Dispatch,
@@ -36,14 +37,60 @@ import {
   LogOut,
   Menu,
   Plus,
+  RefreshCw,
   ScanSearch,
   Search,
+  Server,
   ShieldAlert,
   ShieldCheck,
   UploadCloud,
   UserRound,
+  WifiOff,
   X,
 } from "lucide-react"
+
+/* =========================================================
+   CONFIGURATION
+========================================================= */
+
+const API_BASE_URL =
+  "http://localhost:5000"
+
+const BROWSER_HASH_LIMIT =
+  256 * 1024 * 1024
+
+/* =========================================================
+   API TYPES
+========================================================= */
+
+type ApiListResponse<T> = {
+  success: boolean
+  count: number
+  data: T[]
+}
+
+type ApiItemResponse<T> = {
+  success: boolean
+  message?: string
+  data: T
+}
+
+type ApiErrorResponse = {
+  success?: boolean
+  message?: string
+  integrity?: EvidenceIntegrity
+}
+
+type VerifyEvidenceResponse = {
+  success: boolean
+  verified: boolean
+  integrity: EvidenceIntegrity
+  evidenceId: string
+  algorithm: string
+  expectedHash: string
+  currentHash: string
+  message: string
+}
 
 /* =========================================================
    NAVIGATION
@@ -107,7 +154,7 @@ const pageInfo: Record<
   evidence: {
     title: "Evidence",
     description:
-      "Register, inspect, hash, and manage digital evidence.",
+      "Register and securely store digital forensic evidence.",
   },
 
   transfers: {
@@ -119,13 +166,13 @@ const pageInfo: Record<
   verify: {
     title: "Integrity Verification",
     description:
-      "Verify evidence against blockchain-recorded hashes.",
+      "Recalculate SHA-256 from stored evidence and detect modification.",
   },
 
   audit: {
     title: "Audit Log",
     description:
-      "Review immutable evidence and system activity.",
+      "Review evidence and system activity.",
   },
 }
 
@@ -154,6 +201,13 @@ type InvestigationCase = {
   evidenceCount: number
   createdAt: string
   updatedAt: string
+}
+
+type CreateCasePayload = {
+  title: string
+  description: string
+  investigator: string
+  priority: CasePriority
 }
 
 /* =========================================================
@@ -203,249 +257,13 @@ type EvidenceRecord = {
   versions: EvidenceVersion[]
 }
 
-/* =========================================================
-   INITIAL CASE DATA
-========================================================= */
-
-const initialCases: InvestigationCase[] = [
-  {
-    id: "CASE-2026-0018",
-    title:
-      "Unauthorized Access Investigation",
-    description:
-      "Investigation into suspicious remote access activity detected on an internal workstation.",
-    investigator:
-      "Investigator A",
-    status:
-      "Open",
-    priority:
-      "Critical",
-    evidenceCount:
-      14,
-    createdAt:
-      "18 Sep 2026",
-    updatedAt:
-      "12 minutes ago",
-  },
-
-  {
-    id: "CASE-2026-0017",
-    title:
-      "Server Compromise",
-    description:
-      "Forensic analysis of a production server following indicators of unauthorized modification.",
-    investigator:
-      "Investigator B",
-    status:
-      "Under Review",
-    priority:
-      "High",
-    evidenceCount:
-      9,
-    createdAt:
-      "17 Sep 2026",
-    updatedAt:
-      "48 minutes ago",
-  },
-
-  {
-    id: "CASE-2026-0016",
-    title:
-      "Endpoint Forensic Analysis",
-    description:
-      "Investigation of a potentially compromised employee endpoint and associated user activity.",
-    investigator:
-      "Investigator C",
-    status:
-      "Open",
-    priority:
-      "Medium",
-    evidenceCount:
-      6,
-    createdAt:
-      "15 Sep 2026",
-    updatedAt:
-      "2 hours ago",
-  },
-
-  {
-    id: "CASE-2026-0015",
-    title:
-      "Suspicious Network Traffic",
-    description:
-      "Review of unusual outbound network communications identified during security monitoring.",
-    investigator:
-      "Investigator A",
-    status:
-      "Closed",
-    priority:
-      "Low",
-    evidenceCount:
-      21,
-    createdAt:
-      "10 Sep 2026",
-    updatedAt:
-      "3 days ago",
-  },
-]
-
-/* =========================================================
-   INITIAL EVIDENCE DATA
-========================================================= */
-
-const initialEvidence: EvidenceRecord[] = [
-  {
-    id: "EV-2026-0124",
-    name: "network_capture.pcap",
-    description:
-      "Network packet capture acquired during investigation of suspicious remote access traffic.",
-    caseId:
-      "CASE-2026-0018",
-    caseTitle:
-      "Unauthorized Access Investigation",
-    type:
-      "Network Capture",
-    size:
-      52428800,
-    hash:
-      "91b8f6a4d38e9f72c4a10e8f09dd6b8342ae6ef10b47a9ef67b6fd308a3f2521",
-    custodian:
-      "Investigator A",
-    integrity:
-      "Verified",
-    status:
-      "Sealed",
-    createdAt:
-      "18 Sep 2026",
-    updatedAt:
-      "20 minutes ago",
-    versions: [
-      {
-        version: 1,
-        hash:
-          "91b8f6a4d38e9f72c4a10e8f09dd6b8342ae6ef10b47a9ef67b6fd308a3f2521",
-        createdAt:
-          "18 Sep 2026",
-        note:
-          "Original evidence acquisition",
-      },
-    ],
-  },
-
-  {
-    id: "EV-2026-0123",
-    name: "system_logs.zip",
-    description:
-      "Compressed operating-system and application logs collected from the affected server.",
-    caseId:
-      "CASE-2026-0017",
-    caseTitle:
-      "Server Compromise",
-    type:
-      "Log Archive",
-    size:
-      17825792,
-    hash:
-      "51be229f0da3d17d7cc581d89cc4fcf953e3e35fb331b1a725967a987e2c89aa",
-    custodian:
-      "Investigator B",
-    integrity:
-      "Verified",
-    status:
-      "Registered",
-    createdAt:
-      "17 Sep 2026",
-    updatedAt:
-      "1 hour ago",
-    versions: [
-      {
-        version: 1,
-        hash:
-          "51be229f0da3d17d7cc581d89cc4fcf953e3e35fb331b1a725967a987e2c89aa",
-        createdAt:
-          "17 Sep 2026",
-        note:
-          "Original evidence acquisition",
-      },
-    ],
-  },
-
-  {
-    id: "EV-2026-0122",
-    name: "disk_image.dd",
-    description:
-      "Forensic disk image acquired from the endpoint currently under examination.",
-    caseId:
-      "CASE-2026-0016",
-    caseTitle:
-      "Endpoint Forensic Analysis",
-    type:
-      "Disk Image",
-    size:
-      536870912,
-    hash:
-      "cb99530a5b86832f2f55e9887309f0dbff23043c54bd888f4134c72e77766880",
-    custodian:
-      "Investigator C",
-    integrity:
-      "Pending",
-    status:
-      "Registered",
-    createdAt:
-      "15 Sep 2026",
-    updatedAt:
-      "2 hours ago",
-    versions: [
-      {
-        version: 1,
-        hash:
-          "cb99530a5b86832f2f55e9887309f0dbff23043c54bd888f4134c72e77766880",
-        createdAt:
-          "15 Sep 2026",
-        note:
-          "Original evidence acquisition",
-      },
-    ],
-  },
-
-  {
-    id: "EV-2026-0121",
-    name: "suspicious_email.eml",
-    description:
-      "Email message exported from the affected mailbox for phishing analysis.",
-    caseId:
-      "CASE-2026-0018",
-    caseTitle:
-      "Unauthorized Access Investigation",
-    type:
-      "Document",
-    size:
-      483221,
-    hash:
-      "20acd5cb3f1cc89397471690023ee37053ccae21c377d061b43713abc51435fd",
-    custodian:
-      "Investigator A",
-    integrity:
-      "Mismatch",
-    status:
-      "Registered",
-    createdAt:
-      "18 Sep 2026",
-    updatedAt:
-      "35 minutes ago",
-    versions: [
-      {
-        version: 1,
-        hash:
-          "20acd5cb3f1cc89397471690023ee37053ccae21c377d061b43713abc51435fd",
-        createdAt:
-          "18 Sep 2026",
-        note:
-          "Original evidence acquisition",
-      },
-    ],
-  },
-]
+type UploadEvidencePayload = {
+  file: File
+  caseId: string
+  description: string
+  type: EvidenceType
+  custodian: string
+}
 
 /* =========================================================
    MAIN APPLICATION
@@ -455,14 +273,12 @@ function App() {
   const [
     authenticated,
     setAuthenticated,
-  ] =
-    useState(false)
+  ] = useState(false)
 
   const [
     showPassword,
     setShowPassword,
-  ] =
-    useState(false)
+  ] = useState(false)
 
   const [
     activePage,
@@ -484,7 +300,7 @@ function App() {
   ] =
     useState<
       InvestigationCase[]
-    >(initialCases)
+    >([])
 
   const [
     evidence,
@@ -492,9 +308,254 @@ function App() {
   ] =
     useState<
       EvidenceRecord[]
-    >(initialEvidence)
+    >([])
 
-  if (!authenticated) {
+  const [
+    apiLoading,
+    setApiLoading,
+  ] =
+    useState(false)
+
+  const [
+    apiError,
+    setApiError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  /* -------------------------------------------------------
+     LOAD DATA
+  ------------------------------------------------------- */
+
+  async function loadBackendData() {
+    setApiLoading(
+      true,
+    )
+
+    setApiError(
+      null,
+    )
+
+    try {
+      const [
+        casesResponse,
+        evidenceResponse,
+      ] =
+        await Promise.all([
+          requestJson<
+            ApiListResponse<InvestigationCase>
+          >(
+            "/api/cases",
+          ),
+
+          requestJson<
+            ApiListResponse<EvidenceRecord>
+          >(
+            "/api/evidence",
+          ),
+        ])
+
+      setCases(
+        casesResponse.data,
+      )
+
+      setEvidence(
+        evidenceResponse.data,
+      )
+    } catch (error) {
+      setApiError(
+        getErrorMessage(
+          error,
+        ),
+      )
+    } finally {
+      setApiLoading(
+        false,
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !authenticated
+    ) {
+      return
+    }
+
+    void loadBackendData()
+  }, [
+    authenticated,
+  ])
+
+  /* -------------------------------------------------------
+     CREATE CASE
+  ------------------------------------------------------- */
+
+  async function createCaseOnServer(
+    payload:
+      CreateCasePayload,
+  ) {
+    const response =
+      await requestJson<
+        ApiItemResponse<InvestigationCase>
+      >(
+        "/api/cases",
+        {
+          method:
+            "POST",
+
+          body:
+            JSON.stringify(
+              payload,
+            ),
+        },
+      )
+
+    setCases(
+      (current) => [
+        response.data,
+        ...current,
+      ],
+    )
+  }
+
+  /* -------------------------------------------------------
+     REAL EVIDENCE FILE UPLOAD
+  ------------------------------------------------------- */
+
+  async function uploadEvidenceOnServer(
+    payload:
+      UploadEvidencePayload,
+  ) {
+    const formData =
+      new FormData()
+
+    formData.append(
+      "file",
+      payload.file,
+    )
+
+    formData.append(
+      "caseId",
+      payload.caseId,
+    )
+
+    formData.append(
+      "description",
+      payload.description,
+    )
+
+    formData.append(
+      "type",
+      payload.type,
+    )
+
+    formData.append(
+      "custodian",
+      payload.custodian,
+    )
+
+    const response =
+      await requestJson<
+        ApiItemResponse<EvidenceRecord>
+      >(
+        "/api/evidence/upload",
+        {
+          method:
+            "POST",
+
+          body:
+            formData,
+        },
+      )
+
+    setEvidence(
+      (current) => [
+        response.data,
+        ...current,
+      ],
+    )
+
+    setCases(
+      (current) =>
+        current.map(
+          (item) =>
+            item.id ===
+            payload.caseId
+              ? {
+                  ...item,
+
+                  evidenceCount:
+                    item.evidenceCount +
+                    1,
+
+                  updatedAt:
+                    "Just now",
+                }
+              : item,
+        ),
+    )
+
+    return response.data
+  }
+
+  /* -------------------------------------------------------
+     VERIFY STORED EVIDENCE
+  ------------------------------------------------------- */
+
+  async function verifyEvidenceOnServer(
+    evidenceId: string,
+  ) {
+    try {
+      const response =
+        await requestJson<
+          VerifyEvidenceResponse
+        >(
+          `/api/evidence/${encodeURIComponent(
+            evidenceId,
+          )}/verify`,
+          {
+            method:
+              "POST",
+          },
+        )
+
+      setEvidence(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              evidenceId
+                ? {
+                    ...item,
+
+                    integrity:
+                      response.integrity,
+
+                    updatedAt:
+                      "Just now",
+                  }
+                : item,
+          ),
+      )
+
+      return response
+    } catch (error) {
+      /*
+       * A missing file can cause the backend to mark the
+       * database record as Mismatch while returning an
+       * error status, so reload the latest database state.
+       */
+      await loadBackendData()
+
+      throw error
+    }
+  }
+
+  if (
+    !authenticated
+  ) {
     return (
       <LoginScreen
         showPassword={
@@ -524,7 +585,9 @@ function App() {
     >
       <AmbientBackground />
 
-      {/* DESKTOP SIDEBAR */}
+      {/* ===================================================
+          DESKTOP SIDEBAR
+      =================================================== */}
 
       <aside
         className="
@@ -561,7 +624,9 @@ function App() {
         />
       </aside>
 
-      {/* MOBILE SIDEBAR */}
+      {/* ===================================================
+          MOBILE SIDEBAR
+      =================================================== */}
 
       <AnimatePresence>
         {mobileMenuOpen && (
@@ -605,9 +670,14 @@ function App() {
                 opacity: 0,
               }}
               transition={{
-                type: "spring",
-                stiffness: 260,
-                damping: 28,
+                type:
+                  "spring",
+
+                stiffness:
+                  260,
+
+                damping:
+                  28,
               }}
               className="
                 glass
@@ -648,7 +718,9 @@ function App() {
                   hover:text-white
                 "
               >
-                <X size={17} />
+                <X
+                  size={17}
+                />
               </button>
 
               <SidebarContent
@@ -681,7 +753,9 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* MAIN APPLICATION */}
+      {/* ===================================================
+          MAIN AREA
+      =================================================== */}
 
       <div
         className="
@@ -696,7 +770,6 @@ function App() {
           className="
             flex
             h-[86px]
-            w-full
             items-center
             justify-between
             px-5
@@ -714,7 +787,8 @@ function App() {
             <motion.button
               type="button"
               whileTap={{
-                scale: 0.92,
+                scale:
+                  0.92,
               }}
               onClick={() =>
                 setMobileMenuOpen(
@@ -732,7 +806,9 @@ function App() {
                 lg:hidden
               "
             >
-              <Menu size={19} />
+              <Menu
+                size={19}
+              />
             </motion.button>
 
             <div>
@@ -768,57 +844,32 @@ function App() {
               gap-3
             "
           >
-            <motion.button
-              type="button"
-              whileHover={{
-                scale: 1.03,
-              }}
-              whileTap={{
-                scale: 0.96,
-              }}
+            <div
               className="
                 glass
                 hidden
-                h-11
                 items-center
                 gap-2
                 rounded-2xl
                 px-4
-                text-sm
-                text-white/50
+                py-3
+                text-xs
+                text-emerald-200/50
                 md:flex
               "
             >
-              <Search size={16} />
+              <Server
+                size={14}
+              />
 
-              <span>
-                Search
-              </span>
-
-              <span
-                className="
-                  ml-5
-                  rounded-lg
-                  border
-                  border-white/10
-                  bg-white/5
-                  px-2
-                  py-1
-                  text-[10px]
-                  text-white/30
-                "
-              >
-                Ctrl K
-              </span>
-            </motion.button>
+              PostgreSQL + Off-chain
+            </div>
 
             <motion.button
               type="button"
-              whileHover={{
-                scale: 1.04,
-              }}
               whileTap={{
-                scale: 0.95,
+                scale:
+                  0.95,
               }}
               className="
                 glass
@@ -856,28 +907,29 @@ function App() {
                 activePage
               }
               initial={{
-                opacity: 0,
-                y: 12,
-                scale: 0.995,
+                opacity:
+                  0,
+
+                y:
+                  12,
               }}
               animate={{
-                opacity: 1,
-                y: 0,
-                scale: 1,
+                opacity:
+                  1,
+
+                y:
+                  0,
               }}
               exit={{
-                opacity: 0,
-                y: -8,
-                scale: 0.995,
+                opacity:
+                  0,
+
+                y:
+                  -8,
               }}
               transition={{
-                duration: 0.28,
-                ease: [
-                  0.22,
-                  1,
-                  0.36,
-                  1,
-                ],
+                duration:
+                  0.25,
               }}
             >
               <PageHeader
@@ -886,10 +938,27 @@ function App() {
                 }
               />
 
+              {(apiLoading ||
+                apiError) && (
+                <ApiConnectionBanner
+                  loading={
+                    apiLoading
+                  }
+                  error={
+                    apiError
+                  }
+                  onRetry={() =>
+                    void loadBackendData()
+                  }
+                />
+              )}
+
               {activePage ===
               "dashboard" ? (
                 <Dashboard
-                  cases={cases}
+                  cases={
+                    cases
+                  }
                   evidence={
                     evidence
                   }
@@ -900,8 +969,8 @@ function App() {
                   cases={
                     cases
                   }
-                  setCases={
-                    setCases
+                  onCreateCase={
+                    createCaseOnServer
                   }
                 />
               ) : activePage ===
@@ -910,14 +979,21 @@ function App() {
                   evidence={
                     evidence
                   }
-                  setEvidence={
-                    setEvidence
-                  }
                   cases={
                     cases
                   }
-                  setCases={
-                    setCases
+                  onUploadEvidence={
+                    uploadEvidenceOnServer
+                  }
+                />
+              ) : activePage ===
+                "verify" ? (
+                <VerifyPage
+                  evidence={
+                    evidence
+                  }
+                  onVerify={
+                    verifyEvidenceOnServer
                   }
                 />
               ) : (
@@ -945,10 +1021,15 @@ function SidebarContent({
   onLogout,
 }: {
   activePage: Page
-  setActivePage: (
-    page: Page,
-  ) => void
-  onLogout: () => void
+
+  setActivePage:
+    Dispatch<
+      SetStateAction<Page>
+    > |
+    ((page: Page) => void)
+
+  onLogout:
+    () => void
 }) {
   return (
     <>
@@ -976,7 +1057,6 @@ function SidebarContent({
         >
           <Fingerprint
             size={21}
-            strokeWidth={1.7}
           />
         </div>
 
@@ -1002,16 +1082,7 @@ function SidebarContent({
         </div>
       </div>
 
-      <div
-        className="
-          my-4
-          h-px
-          bg-gradient-to-r
-          from-transparent
-          via-white/10
-          to-transparent
-        "
-      />
+      <Divider />
 
       <nav
         className="
@@ -1034,7 +1105,8 @@ function SidebarContent({
                   item.id
                 }
                 whileTap={{
-                  scale: 0.98,
+                  scale:
+                    0.98,
                 }}
                 onClick={() =>
                   setActivePage(
@@ -1053,7 +1125,6 @@ function SidebarContent({
                   px-3
                   text-left
                   text-sm
-                  transition-colors
 
                   ${
                     selected
@@ -1065,14 +1136,6 @@ function SidebarContent({
                 {selected && (
                   <motion.div
                     layoutId="sidebar-selection"
-                    transition={{
-                      type:
-                        "spring",
-                      stiffness:
-                        350,
-                      damping:
-                        30,
-                    }}
                     className="
                       absolute
                       inset-0
@@ -1144,7 +1207,7 @@ function SidebarContent({
               text-emerald-200/70
             "
           >
-            System Secure
+            Storage Ready
           </span>
         </div>
 
@@ -1156,15 +1219,16 @@ function SidebarContent({
             text-white/25
           "
         >
-          Local development
-          environment
+          PostgreSQL metadata +
+          off-chain evidence files
         </p>
       </div>
 
       <motion.button
         type="button"
         whileTap={{
-          scale: 0.98,
+          scale:
+            0.98,
         }}
         onClick={
           onLogout
@@ -1179,12 +1243,13 @@ function SidebarContent({
           px-3
           text-sm
           text-white/35
-          transition
           hover:bg-white/[0.04]
           hover:text-white/70
         "
       >
-        <LogOut size={16} />
+        <LogOut
+          size={16}
+        />
 
         Sign out
       </motion.button>
@@ -1207,13 +1272,7 @@ function PageHeader({
         mb-7
       "
     >
-      <motion.h2
-        initial={{
-          opacity: 0,
-        }}
-        animate={{
-          opacity: 1,
-        }}
+      <h2
         className="
           text-3xl
           font-semibold
@@ -1226,7 +1285,7 @@ function PageHeader({
             page
           ].title
         }
-      </motion.h2>
+      </h2>
 
       <p
         className="
@@ -1248,6 +1307,149 @@ function PageHeader({
 }
 
 /* =========================================================
+   API BANNER
+========================================================= */
+
+function ApiConnectionBanner({
+  loading,
+  error,
+  onRetry,
+}: {
+  loading:
+    boolean
+
+  error:
+    string | null
+
+  onRetry:
+    () => void
+}) {
+  if (loading) {
+    return (
+      <div
+        className="
+          mb-5
+          flex
+          items-center
+          gap-3
+          rounded-[20px]
+          border
+          border-blue-400/10
+          bg-blue-400/[0.04]
+          px-4
+          py-3
+        "
+      >
+        <LoaderCircle
+          size={16}
+          className="
+            animate-spin
+            text-blue-300
+          "
+        />
+
+        <p
+          className="
+            text-xs
+            text-blue-200/70
+          "
+        >
+          Loading TRACE-X
+          data...
+        </p>
+      </div>
+    )
+  }
+
+  if (!error) {
+    return null
+  }
+
+  return (
+    <div
+      className="
+        mb-5
+        flex
+        flex-col
+        gap-3
+        rounded-[20px]
+        border
+        border-red-400/15
+        bg-red-400/[0.05]
+        p-4
+        sm:flex-row
+        sm:items-center
+        sm:justify-between
+      "
+    >
+      <div
+        className="
+          flex
+          gap-3
+        "
+      >
+        <WifiOff
+          size={17}
+          className="
+            mt-0.5
+            text-red-300
+          "
+        />
+
+        <div>
+          <p
+            className="
+              text-xs
+              text-red-200
+            "
+          >
+            Backend connection
+            failed
+          </p>
+
+          <p
+            className="
+              mt-1
+              text-xs
+              text-white/30
+            "
+          >
+            {error}
+          </p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={
+          onRetry
+        }
+        className="
+          flex
+          h-9
+          items-center
+          justify-center
+          gap-2
+          rounded-xl
+          border
+          border-white/10
+          bg-white/[0.05]
+          px-3
+          text-xs
+          text-white/50
+        "
+      >
+        <RefreshCw
+          size={13}
+        />
+
+        Retry
+      </button>
+    </div>
+  )
+}
+
+/* =========================================================
    DASHBOARD
 ========================================================= */
 
@@ -1255,81 +1457,32 @@ function Dashboard({
   cases,
   evidence,
 }: {
-  cases: InvestigationCase[]
-  evidence: EvidenceRecord[]
+  cases:
+    InvestigationCase[]
+
+  evidence:
+    EvidenceRecord[]
 }) {
-  const verifiedCount =
+  const verified =
     evidence.filter(
       (item) =>
         item.integrity ===
         "Verified",
     ).length
 
-  const activeCaseCount =
+  const mismatches =
+    evidence.filter(
+      (item) =>
+        item.integrity ===
+        "Mismatch",
+    ).length
+
+  const activeCases =
     cases.filter(
       (item) =>
         item.status !==
         "Closed",
     ).length
-
-  const stats = [
-    {
-      label:
-        "Total Evidence",
-      value:
-        String(
-          evidence.length,
-        ),
-      detail:
-        `Across ${cases.length} cases`,
-      icon:
-        FileText,
-    },
-
-    {
-      label:
-        "Verified",
-      value:
-        String(
-          verifiedCount,
-        ),
-      detail:
-        evidence.length >
-        0
-          ? `${(
-              (verifiedCount /
-                evidence.length) *
-              100
-            ).toFixed(1)}% integrity rate`
-          : "No evidence yet",
-      icon:
-        CheckCircle2,
-    },
-
-    {
-      label:
-        "Pending Transfers",
-      value:
-        "8",
-      detail:
-        "Awaiting acceptance",
-      icon:
-        ArrowLeftRight,
-    },
-
-    {
-      label:
-        "Active Cases",
-      value:
-        String(
-          activeCaseCount,
-        ),
-      detail:
-        `${cases.length} total cases`,
-      icon:
-        FolderKanban,
-    },
-  ]
 
   return (
     <>
@@ -1342,127 +1495,57 @@ function Dashboard({
           xl:grid-cols-4
         "
       >
-        {stats.map(
-          (
-            stat,
-            index,
-          ) => {
-            const Icon =
-              stat.icon
+        <StatCard
+          label="Evidence"
+          value={
+            evidence.length
+          }
+          detail="PostgreSQL records"
+          icon={
+            <Database
+              size={18}
+            />
+          }
+        />
 
-            return (
-              <motion.div
-                key={
-                  stat.label
-                }
-                initial={{
-                  opacity:
-                    0,
-                  y: 15,
-                }}
-                animate={{
-                  opacity:
-                    1,
-                  y: 0,
-                }}
-                transition={{
-                  delay:
-                    index *
-                    0.06,
-                }}
-                whileHover={{
-                  y: -3,
-                }}
-                className="
-                  glass
-                  rounded-[26px]
-                  p-5
-                "
-              >
-                <div
-                  className="
-                    flex
-                    items-center
-                    justify-between
-                  "
-                >
-                  <div
-                    className="
-                      flex
-                      h-10
-                      w-10
-                      items-center
-                      justify-center
-                      rounded-2xl
-                      border
-                      border-white/10
-                      bg-white/[0.06]
-                    "
-                  >
-                    <Icon
-                      size={17}
-                      className="
-                        text-white/60
-                      "
-                    />
-                  </div>
+        <StatCard
+          label="Verified"
+          value={
+            verified
+          }
+          detail="Integrity checks"
+          icon={
+            <ShieldCheck
+              size={18}
+            />
+          }
+        />
 
-                  <span
-                    className="
-                      rounded-full
-                      border
-                      border-white/10
-                      bg-white/[0.04]
-                      px-2.5
-                      py-1
-                      text-[10px]
-                      text-white/30
-                    "
-                  >
-                    LIVE
-                  </span>
-                </div>
+        <StatCard
+          label="Mismatches"
+          value={
+            mismatches
+          }
+          detail="Requires attention"
+          icon={
+            <ShieldAlert
+              size={18}
+            />
+          }
+        />
 
-                <p
-                  className="
-                    mt-6
-                    text-3xl
-                    font-semibold
-                    tracking-[-0.04em]
-                  "
-                >
-                  {
-                    stat.value
-                  }
-                </p>
-
-                <p
-                  className="
-                    mt-1
-                    text-sm
-                    text-white/65
-                  "
-                >
-                  {
-                    stat.label
-                  }
-                </p>
-
-                <p
-                  className="
-                    mt-2
-                    text-xs
-                    text-white/25
-                  "
-                >
-                  {
-                    stat.detail
-                  }
-                </p>
-              </motion.div>
-            )
-          },
-        )}
+        <StatCard
+          label="Active Cases"
+          value={
+            activeCases
+          }
+          detail={`${cases.length} total cases`}
+          icon={
+            <FolderKanban
+              size={18}
+            />
+          }
+        />
       </div>
 
       <div
@@ -1488,8 +1571,7 @@ function Dashboard({
               justify-between
               border-b
               border-white/[0.07]
-              px-5
-              py-5
+              p-5
             "
           >
             <div>
@@ -1509,8 +1591,8 @@ function Dashboard({
                   text-white/25
                 "
               >
-                Latest registered
-                evidence
+                Latest PostgreSQL
+                records
               </p>
             </div>
 
@@ -1523,17 +1605,72 @@ function Dashboard({
           </div>
 
           {evidence
-            .slice(0, 3)
+            .slice(
+              0,
+              5,
+            )
             .map(
               (item) => (
-                <DashboardEvidenceRow
+                <div
                   key={
                     item.id
                   }
-                  evidence={
-                    item
-                  }
-                />
+                  className="
+                    flex
+                    items-center
+                    gap-4
+                    border-b
+                    border-white/[0.05]
+                    px-5
+                    py-4
+                    last:border-0
+                  "
+                >
+                  <FileText
+                    size={16}
+                    className="
+                      shrink-0
+                      text-white/35
+                    "
+                  />
+
+                  <div
+                    className="
+                      min-w-0
+                      flex-1
+                    "
+                  >
+                    <p
+                      className="
+                        truncate
+                        text-sm
+                        text-white/70
+                      "
+                    >
+                      {
+                        item.name
+                      }
+                    </p>
+
+                    <p
+                      className="
+                        mt-1
+                        text-xs
+                        text-white/25
+                      "
+                    >
+                      {
+                        item.id
+                      }
+                    </p>
+                  </div>
+
+                  <IntegrityBadge
+                    integrity={
+                      item.integrity
+                    }
+                  />
+                </div>
               ),
             )}
         </div>
@@ -1545,223 +1682,7 @@ function Dashboard({
             p-6
           "
         >
-          <div
-            className="
-              flex
-              items-center
-              justify-between
-            "
-          >
-            <div>
-              <h3
-                className="
-                  text-sm
-                  font-medium
-                "
-              >
-                Integrity Status
-              </h3>
-
-              <p
-                className="
-                  mt-1
-                  text-xs
-                  text-white/25
-                "
-              >
-                Cryptographic
-                verification
-              </p>
-            </div>
-
-            <Blocks
-              size={18}
-              className="
-                text-white/30
-              "
-            />
-          </div>
-
-          <div
-            className="
-              mt-8
-              flex
-              justify-center
-            "
-          >
-            <div
-              className="
-                relative
-                flex
-                h-40
-                w-40
-                items-center
-                justify-center
-                rounded-full
-                border
-                border-emerald-400/15
-                bg-emerald-400/[0.04]
-              "
-            >
-              <div
-                className="
-                  absolute
-                  inset-3
-                  rounded-full
-                  border
-                  border-emerald-400/10
-                "
-              />
-
-              <div
-                className="
-                  text-center
-                "
-              >
-                <ShieldCheck
-                  size={28}
-                  className="
-                    mx-auto
-                    text-emerald-300
-                  "
-                />
-
-                <p
-                  className="
-                    mt-2
-                    text-2xl
-                    font-semibold
-                    tracking-tight
-                  "
-                >
-                  {evidence.length >
-                  0
-                    ? `${(
-                        (verifiedCount /
-                          evidence.length) *
-                        100
-                      ).toFixed(1)}%`
-                    : "0%"}
-                </p>
-
-                <p
-                  className="
-                    text-[10px]
-                    text-white/30
-                  "
-                >
-                  VERIFIED
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div
-            className="
-              mt-8
-              flex
-              items-center
-              justify-between
-              rounded-2xl
-              border
-              border-white/[0.07]
-              bg-white/[0.03]
-              p-3
-            "
-          >
-            <div
-              className="
-                flex
-                items-center
-                gap-2
-              "
-            >
-              <Clock3
-                size={14}
-                className="
-                  text-white/30
-                "
-              />
-
-              <span
-                className="
-                  text-xs
-                  text-white/35
-                "
-              >
-                Last verification
-              </span>
-            </div>
-
-            <span
-              className="
-                text-xs
-                text-white/55
-              "
-            >
-              Just now
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className="
-          mt-4
-          grid
-          grid-cols-1
-          gap-4
-          lg:grid-cols-2
-        "
-      >
-        <div
-          className="
-            glass
-            rounded-[28px]
-            p-6
-          "
-        >
-          <ShieldAlert
-            size={20}
-            className="
-              text-amber-300/70
-            "
-          />
-
-          <h3
-            className="
-              mt-5
-              text-lg
-              font-medium
-            "
-          >
-            Pending custody
-            actions
-          </h3>
-
-          <p
-            className="
-              mt-2
-              text-sm
-              leading-6
-              text-white/30
-            "
-          >
-            Custody workflows
-            will be connected
-            in the Transfers
-            module.
-          </p>
-        </div>
-
-        <div
-          className="
-            glass
-            rounded-[28px]
-            p-6
-          "
-        >
-          <Activity
+          <Blocks
             size={20}
             className="
               text-blue-300/70
@@ -1775,7 +1696,7 @@ function Dashboard({
               font-medium
             "
           >
-            Blockchain activity
+            TRACE-X Storage
           </h3>
 
           <p
@@ -1786,42 +1707,65 @@ function Dashboard({
               text-white/30
             "
           >
-            Blockchain event
-            recording will be
-            enabled after the
-            backend layer is
-            ready.
+            Metadata and hashes are
+            stored in PostgreSQL.
+            Uploaded evidence bytes
+            remain in secure off-chain
+            storage.
           </p>
+
+          <div
+            className="
+              mt-6
+              space-y-3
+            "
+          >
+            <StorageRow
+              label="Metadata"
+              value="PostgreSQL"
+            />
+
+            <StorageRow
+              label="Evidence files"
+              value="Off-chain"
+            />
+
+            <StorageRow
+              label="Hash"
+              value="SHA-256"
+            />
+
+            <StorageRow
+              label="Blockchain"
+              value="Next phase"
+            />
+          </div>
         </div>
       </div>
     </>
   )
 }
 
-/* =========================================================
-   DASHBOARD EVIDENCE ROW
-========================================================= */
-
-function DashboardEvidenceRow({
-  evidence,
+function StatCard({
+  label,
+  value,
+  detail,
+  icon,
 }: {
-  evidence: EvidenceRecord
+  label: string
+  value: number
+  detail: string
+  icon: ReactNode
 }) {
   return (
     <motion.div
       whileHover={{
-        backgroundColor:
-          "rgba(255,255,255,0.025)",
+        y: -3,
       }}
       className="
-        flex
-        items-center
-        gap-4
-        border-b
-        border-white/[0.05]
-        px-5
-        py-4
-        last:border-b-0
+        glass
+        rounded-[26px]
+        p-5
       "
     >
       <div
@@ -1829,81 +1773,89 @@ function DashboardEvidenceRow({
           flex
           h-10
           w-10
-          shrink-0
           items-center
           justify-center
           rounded-2xl
           border
-          border-white/[0.08]
-          bg-white/[0.04]
+          border-white/10
+          bg-white/[0.05]
+          text-white/50
         "
       >
-        <FileText
-          size={16}
-          className="
-            text-white/40
-          "
-        />
+        {icon}
       </div>
 
-      <div
+      <p
         className="
-          min-w-0
-          flex-1
+          mt-6
+          text-3xl
+          font-semibold
         "
       >
-        <div
-          className="
-            flex
-            items-center
-            gap-2
-          "
-        >
-          <p
-            className="
-              truncate
-              text-sm
-              font-medium
-              text-white/75
-            "
-          >
-            {
-              evidence.name
-            }
-          </p>
+        {value}
+      </p>
 
-          <span
-            className="
-              text-[10px]
-              text-white/20
-            "
-          >
-            {
-              evidence.id
-            }
-          </span>
-        </div>
+      <p
+        className="
+          mt-1
+          text-sm
+          text-white/65
+        "
+      >
+        {label}
+      </p>
 
-        <p
-          className="
-            mt-1
-            truncate
-            text-xs
-            text-white/25
-          "
-        >
-          {
-            evidence.caseTitle
-          }
-        </p>
-      </div>
-
-      <IntegrityBadge
-        integrity={
-          evidence.integrity
-        }
-      />
+      <p
+        className="
+          mt-2
+          text-xs
+          text-white/25
+        "
+      >
+        {detail}
+      </p>
     </motion.div>
+  )
+}
+
+function StorageRow({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className="
+        flex
+        items-center
+        justify-between
+        rounded-2xl
+        border
+        border-white/[0.06]
+        bg-white/[0.025]
+        p-3
+      "
+    >
+      <span
+        className="
+          text-xs
+          text-white/30
+        "
+      >
+        {label}
+      </span>
+
+      <span
+        className="
+          text-xs
+          text-white/60
+        "
+      >
+        {value}
+      </span>
+    </div>
   )
 }
 
@@ -1913,84 +1865,79 @@ function DashboardEvidenceRow({
 
 function CasesPage({
   cases,
-  setCases,
+  onCreateCase,
 }: {
   cases:
     InvestigationCase[]
 
-  setCases:
-    Dispatch<
-      SetStateAction<
-        InvestigationCase[]
-      >
-    >
+  onCreateCase: (
+    payload:
+      CreateCasePayload,
+  ) => Promise<void>
 }) {
   const [
-    searchQuery,
-    setSearchQuery,
+    search,
+    setSearch,
   ] =
     useState("")
 
   const [
-    statusFilter,
-    setStatusFilter,
-  ] =
-    useState<
-      | "All"
-      | CaseStatus
-    >("All")
-
-  const [
-    selectedCase,
-    setSelectedCase,
-  ] =
-    useState<
-      InvestigationCase | null
-    >(null)
-
-  const [
-    createCaseOpen,
-    setCreateCaseOpen,
+    createOpen,
+    setCreateOpen,
   ] =
     useState(false)
 
   const [
-    newTitle,
-    setNewTitle,
+    title,
+    setTitle,
   ] =
     useState("")
 
   const [
-    newDescription,
-    setNewDescription,
+    description,
+    setDescription,
   ] =
     useState("")
 
   const [
-    newInvestigator,
-    setNewInvestigator,
+    investigator,
+    setInvestigator,
   ] =
     useState(
       "Investigator A",
     )
 
   const [
-    newPriority,
-    setNewPriority,
+    priority,
+    setPriority,
   ] =
     useState<CasePriority>(
       "Medium",
     )
 
-  const filteredCases =
+  const [
+    creating,
+    setCreating,
+  ] =
+    useState(false)
+
+  const [
+    error,
+    setError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const filtered =
     cases.filter(
       (item) => {
         const query =
-          searchQuery
+          search
             .trim()
             .toLowerCase()
 
-        const matchesSearch =
+        return (
           item.title
             .toLowerCase()
             .includes(
@@ -2000,112 +1947,70 @@ function CasesPage({
             .toLowerCase()
             .includes(
               query,
-            ) ||
-          item.investigator
-            .toLowerCase()
-            .includes(
-              query,
             )
-
-        const matchesStatus =
-          statusFilter ===
-            "All" ||
-          item.status ===
-            statusFilter
-
-        return (
-          matchesSearch &&
-          matchesStatus
         )
       },
     )
 
-  function createCase() {
+  function reset() {
+    setTitle("")
+    setDescription("")
+    setInvestigator(
+      "Investigator A",
+    )
+    setPriority(
+      "Medium",
+    )
+    setError(
+      null,
+    )
+  }
+
+  async function submit() {
     if (
-      !newTitle.trim()
+      !title.trim() ||
+      creating
     ) {
       return
     }
 
-    const existingNumbers =
-      cases.map(
-        (item) =>
-          Number(
-            item.id
-              .split("-")
-              .pop(),
-          ),
-      )
+    setCreating(
+      true,
+    )
 
-    const highest =
-      existingNumbers.length >
-      0
-        ? Math.max(
-            ...existingNumbers,
-          )
-        : 0
+    setError(
+      null,
+    )
 
-    const next =
-      String(
-        highest + 1,
-      ).padStart(
-        4,
-        "0",
-      )
-
-    const today =
-      new Date().toLocaleDateString(
-        "en-GB",
-        {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        },
-      )
-
-    const newCase: InvestigationCase =
-      {
-        id:
-          `CASE-2026-${next}`,
+    try {
+      await onCreateCase({
         title:
-          newTitle.trim(),
+          title.trim(),
+
         description:
-          newDescription.trim() ||
-          "No investigation description has been provided.",
-        investigator:
-          newInvestigator,
-        status:
-          "Open",
-        priority:
-          newPriority,
-        evidenceCount:
-          0,
-        createdAt:
-          today,
-        updatedAt:
-          "Just now",
-      }
+          description.trim(),
 
-    setCases(
-      (
-        current,
-      ) => [
-        newCase,
-        ...current,
-      ],
-    )
+        investigator,
 
-    setNewTitle("")
-    setNewDescription("")
-    setNewInvestigator(
-      "Investigator A",
-    )
-    setNewPriority(
-      "Medium",
-    )
-    setCreateCaseOpen(
-      false,
-    )
+        priority,
+      })
+
+      setCreateOpen(
+        false,
+      )
+
+      reset()
+    } catch (submitError) {
+      setError(
+        getErrorMessage(
+          submitError,
+        ),
+      )
+    } finally {
+      setCreating(
+        false,
+      )
+    }
   }
 
   return (
@@ -2116,259 +2021,203 @@ function CasesPage({
           flex
           flex-col
           gap-3
-          xl:flex-row
-          xl:items-center
-          xl:justify-between
+          md:flex-row
+          md:items-center
+          md:justify-between
         "
       >
-        <div
-          className="
-            flex
-            flex-1
-            flex-col
-            gap-3
-            sm:flex-row
-          "
-        >
-          <div
-            className="
-              glass
-              flex
-              h-12
-              w-full
-              items-center
-              gap-3
-              rounded-2xl
-              px-4
-              sm:max-w-[380px]
-            "
-          >
-            <Search
-              size={17}
-              className="
-                shrink-0
-                text-white/30
-              "
-            />
+        <SearchBox
+          value={
+            search
+          }
+          onChange={
+            setSearch
+          }
+          placeholder="Search cases..."
+        />
 
-            <input
-              value={
-                searchQuery
-              }
-              onChange={(
-                event,
-              ) =>
-                setSearchQuery(
-                  event.target
-                    .value,
-                )
-              }
-              placeholder="Search cases..."
-              className="
-                h-full
-                w-full
-                bg-transparent
-                text-sm
-                text-white
-                placeholder:text-white/25
-              "
-            />
-          </div>
+        <PrimaryButton
+          onClick={() => {
+            reset()
 
-          <div
-            className="
-              glass
-              flex
-              items-center
-              gap-1
-              overflow-x-auto
-              rounded-2xl
-              p-1
-            "
-          >
-            {(
-              [
-                "All",
-                "Open",
-                "Under Review",
-                "Closed",
-              ] as const
-            ).map(
-              (
-                filter,
-              ) => {
-                const active =
-                  statusFilter ===
-                  filter
-
-                return (
-                  <motion.button
-                    type="button"
-                    key={
-                      filter
-                    }
-                    whileTap={{
-                      scale:
-                        0.96,
-                    }}
-                    onClick={() =>
-                      setStatusFilter(
-                        filter,
-                      )
-                    }
-                    className={`
-                      relative
-                      h-10
-                      whitespace-nowrap
-                      rounded-xl
-                      px-4
-                      text-xs
-                      transition-colors
-
-                      ${
-                        active
-                          ? "text-white"
-                          : "text-white/35 hover:text-white/65"
-                      }
-                    `}
-                  >
-                    {active && (
-                      <motion.div
-                        layoutId="case-filter"
-                        className="
-                          absolute
-                          inset-0
-                          rounded-xl
-                          border
-                          border-white/10
-                          bg-white/[0.08]
-                        "
-                      />
-                    )}
-
-                    <span
-                      className="
-                        relative
-                        z-10
-                      "
-                    >
-                      {
-                        filter
-                      }
-                    </span>
-                  </motion.button>
-                )
-              },
-            )}
-          </div>
-        </div>
-
-        <motion.button
-          type="button"
-          whileHover={{
-            scale: 1.02,
-          }}
-          whileTap={{
-            scale: 0.97,
-          }}
-          onClick={() =>
-            setCreateCaseOpen(
+            setCreateOpen(
               true,
             )
-          }
-          className="
-            flex
-            h-12
-            items-center
-            justify-center
-            gap-2
-            rounded-2xl
-            bg-white
-            px-5
-            text-sm
-            font-semibold
-            text-black
-          "
+          }}
         >
-          <Plus size={17} />
+          <Plus
+            size={16}
+          />
 
           Create Case
-        </motion.button>
-      </div>
-
-      <div
-        className="
-          mb-4
-          flex
-          items-center
-          justify-between
-          px-1
-        "
-      >
-        <p
-          className="
-            text-xs
-            text-white/30
-          "
-        >
-          {
-            filteredCases.length
-          }{" "}
-          {filteredCases.length ===
-          1
-            ? "case"
-            : "cases"}
-        </p>
-
-        <p
-          className="
-            text-xs
-            text-white/20
-          "
-        >
-          Updated locally
-        </p>
+        </PrimaryButton>
       </div>
 
       <div
         className="
           grid
-          grid-cols-1
           gap-4
         "
       >
-        {filteredCases.map(
-          (
-            investigationCase,
-            index,
-          ) => (
-            <CaseCard
+        {filtered.map(
+          (item) => (
+            <div
               key={
-                investigationCase.id
+                item.id
               }
-              investigationCase={
-                investigationCase
-              }
-              index={
-                index
-              }
-              onOpen={() =>
-                setSelectedCase(
-                  investigationCase,
-                )
-              }
-            />
+              className="
+                glass
+                rounded-[26px]
+                p-5
+                md:p-6
+              "
+            >
+              <div
+                className="
+                  flex
+                  flex-col
+                  gap-5
+                  lg:flex-row
+                  lg:items-center
+                "
+              >
+                <div
+                  className="
+                    flex
+                    min-w-0
+                    flex-1
+                    gap-4
+                  "
+                >
+                  <div
+                    className="
+                      flex
+                      h-12
+                      w-12
+                      shrink-0
+                      items-center
+                      justify-center
+                      rounded-2xl
+                      border
+                      border-white/10
+                      bg-white/[0.05]
+                    "
+                  >
+                    <FolderKanban
+                      size={19}
+                      className="
+                        text-white/50
+                      "
+                    />
+                  </div>
+
+                  <div
+                    className="
+                      min-w-0
+                    "
+                  >
+                    <div
+                      className="
+                        flex
+                        flex-wrap
+                        items-center
+                        gap-2
+                      "
+                    >
+                      <h3
+                        className="
+                          text-base
+                          font-medium
+                          text-white/80
+                        "
+                      >
+                        {
+                          item.title
+                        }
+                      </h3>
+
+                      <PriorityBadge
+                        priority={
+                          item.priority
+                        }
+                      />
+
+                      <CaseStatusBadge
+                        status={
+                          item.status
+                        }
+                      />
+                    </div>
+
+                    <p
+                      className="
+                        mt-1
+                        text-xs
+                        text-white/25
+                      "
+                    >
+                      {
+                        item.id
+                      }
+                    </p>
+
+                    <p
+                      className="
+                        mt-3
+                        max-w-2xl
+                        text-sm
+                        leading-6
+                        text-white/30
+                      "
+                    >
+                      {
+                        item.description
+                      }
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  className="
+                    grid
+                    grid-cols-2
+                    gap-4
+                    sm:grid-cols-3
+                    lg:min-w-[360px]
+                  "
+                >
+                  <MetaItem
+                    label="INVESTIGATOR"
+                    value={
+                      item.investigator
+                    }
+                  />
+
+                  <MetaItem
+                    label="EVIDENCE"
+                    value={`${item.evidenceCount} items`}
+                  />
+
+                  <MetaItem
+                    label="CREATED"
+                    value={
+                      item.createdAt
+                    }
+                  />
+                </div>
+              </div>
+            </div>
           ),
         )}
 
-        {filteredCases.length ===
+        {filtered.length ===
           0 && (
           <EmptyState
             title="No cases found"
-            description="Try changing your search or status filter."
+            description="Try another search."
             icon={
-              <Search
-                size={26}
+              <FolderKanban
+                size={27}
               />
             }
           />
@@ -2376,75 +2225,22 @@ function CasesPage({
       </div>
 
       <AnimatePresence>
-        {selectedCase && (
-          <CaseDetails
-            investigationCase={
-              selectedCase
-            }
-            onClose={() =>
-              setSelectedCase(
-                null,
-              )
-            }
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {createCaseOpen && (
+        {createOpen && (
           <>
             <ModalBackdrop
               onClose={() =>
-                setCreateCaseOpen(
+                setCreateOpen(
                   false,
                 )
               }
             />
 
-            <motion.div
-              initial={{
-                opacity: 0,
-                scale: 0.94,
-                y: 24,
-              }}
-              animate={{
-                opacity: 1,
-                scale: 1,
-                y: 0,
-              }}
-              exit={{
-                opacity: 0,
-                scale: 0.96,
-                y: 15,
-              }}
-              transition={{
-                type:
-                  "spring",
-                stiffness:
-                  300,
-                damping:
-                  28,
-              }}
-              className="
-                glass
-                fixed
-                left-1/2
-                top-1/2
-                z-[80]
-                w-[calc(100%_-_2rem)]
-                max-w-[520px]
-                -translate-x-1/2
-                -translate-y-1/2
-                rounded-[30px]
-                p-6
-                md:p-7
-              "
-            >
+            <ModalCard>
               <ModalHeader
                 title="Create Case"
-                description="Create a new digital forensic investigation."
+                description="Create a persistent forensic investigation."
                 onClose={() =>
-                  setCreateCaseOpen(
+                  setCreateOpen(
                     false,
                   )
                 }
@@ -2460,20 +2256,22 @@ function CasesPage({
                   label="Case title"
                 >
                   <input
-                    autoFocus
                     value={
-                      newTitle
+                      title
                     }
                     onChange={(
                       event,
                     ) =>
-                      setNewTitle(
-                        event.target
+                      setTitle(
+                        event
+                          .target
                           .value,
                       )
                     }
-                    placeholder="e.g. Unauthorized access investigation"
-                    className={inputClass}
+                    className={
+                      inputClass
+                    }
+                    placeholder="Investigation title"
                   />
                 </FormField>
 
@@ -2481,27 +2279,29 @@ function CasesPage({
                   label="Description"
                 >
                   <textarea
+                    rows={4}
                     value={
-                      newDescription
+                      description
                     }
                     onChange={(
                       event,
                     ) =>
-                      setNewDescription(
-                        event.target
+                      setDescription(
+                        event
+                          .target
                           .value,
                       )
                     }
+                    className={
+                      textareaClass
+                    }
                     placeholder="Describe the investigation..."
-                    rows={4}
-                    className={textareaClass}
                   />
                 </FormField>
 
                 <div
                   className="
                     grid
-                    grid-cols-1
                     gap-4
                     sm:grid-cols-2
                   "
@@ -2511,24 +2311,29 @@ function CasesPage({
                   >
                     <select
                       value={
-                        newInvestigator
+                        investigator
                       }
                       onChange={(
                         event,
                       ) =>
-                        setNewInvestigator(
-                          event.target
+                        setInvestigator(
+                          event
+                            .target
                             .value,
                         )
                       }
-                      className={selectClass}
+                      className={
+                        selectClass
+                      }
                     >
                       <option>
                         Investigator A
                       </option>
+
                       <option>
                         Investigator B
                       </option>
+
                       <option>
                         Investigator C
                       </option>
@@ -2540,617 +2345,71 @@ function CasesPage({
                   >
                     <select
                       value={
-                        newPriority
+                        priority
                       }
                       onChange={(
                         event,
                       ) =>
-                        setNewPriority(
-                          event.target
+                        setPriority(
+                          event
+                            .target
                             .value as CasePriority,
                         )
                       }
-                      className={selectClass}
+                      className={
+                        selectClass
+                      }
                     >
-                      <option value="Low">
+                      <option>
                         Low
                       </option>
-                      <option value="Medium">
+
+                      <option>
                         Medium
                       </option>
-                      <option value="High">
+
+                      <option>
                         High
                       </option>
-                      <option value="Critical">
+
+                      <option>
                         Critical
                       </option>
                     </select>
                   </FormField>
                 </div>
+
+                {error && (
+                  <FormError
+                    message={
+                      error
+                    }
+                  />
+                )}
               </div>
 
               <ModalActions
                 onCancel={() =>
-                  setCreateCaseOpen(
+                  setCreateOpen(
                     false,
                   )
                 }
-                onConfirm={
-                  createCase
+                onConfirm={() =>
+                  void submit()
+                }
+                disabled={
+                  !title.trim()
+                }
+                busy={
+                  creating
                 }
                 confirmText="Create Case"
-                disabled={
-                  !newTitle.trim()
-                }
+                busyText="Creating..."
               />
-            </motion.div>
+            </ModalCard>
           </>
         )}
       </AnimatePresence>
-    </>
-  )
-}
-
-/* =========================================================
-   CASE CARD
-========================================================= */
-
-function CaseCard({
-  investigationCase,
-  index,
-  onOpen,
-}: {
-  investigationCase:
-    InvestigationCase
-  index: number
-  onOpen: () => void
-}) {
-  return (
-    <motion.button
-      type="button"
-      initial={{
-        opacity: 0,
-        y: 15,
-      }}
-      animate={{
-        opacity: 1,
-        y: 0,
-      }}
-      transition={{
-        delay:
-          index *
-          0.05,
-      }}
-      whileHover={{
-        y: -2,
-      }}
-      whileTap={{
-        scale: 0.995,
-      }}
-      onClick={
-        onOpen
-      }
-      className="
-        glass
-        w-full
-        rounded-[26px]
-        p-5
-        text-left
-        md:p-6
-      "
-    >
-      <div
-        className="
-          flex
-          flex-col
-          gap-5
-          lg:flex-row
-          lg:items-center
-        "
-      >
-        <div
-          className="
-            flex
-            min-w-0
-            flex-1
-            items-start
-            gap-4
-          "
-        >
-          <div
-            className="
-              flex
-              h-12
-              w-12
-              shrink-0
-              items-center
-              justify-center
-              rounded-2xl
-              border
-              border-white/10
-              bg-white/[0.05]
-            "
-          >
-            <FolderKanban
-              size={19}
-              className="
-                text-white/50
-              "
-            />
-          </div>
-
-          <div
-            className="
-              min-w-0
-            "
-          >
-            <div
-              className="
-                flex
-                flex-wrap
-                items-center
-                gap-2
-              "
-            >
-              <h3
-                className="
-                  truncate
-                  text-base
-                  font-medium
-                  text-white/85
-                "
-              >
-                {
-                  investigationCase.title
-                }
-              </h3>
-
-              <PriorityBadge
-                priority={
-                  investigationCase.priority
-                }
-              />
-            </div>
-
-            <p
-              className="
-                mt-1
-                text-[11px]
-                font-medium
-                tracking-wide
-                text-white/25
-              "
-            >
-              {
-                investigationCase.id
-              }
-            </p>
-
-            <p
-              className="
-                mt-3
-                max-w-2xl
-                text-sm
-                leading-6
-                text-white/30
-              "
-            >
-              {
-                investigationCase.description
-              }
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="
-            flex
-            flex-wrap
-            items-center
-            gap-x-6
-            gap-y-3
-            lg:justify-end
-          "
-        >
-          <div>
-            <p
-              className="
-                text-[10px]
-                text-white/20
-              "
-            >
-              INVESTIGATOR
-            </p>
-
-            <div
-              className="
-                mt-1
-                flex
-                items-center
-                gap-2
-              "
-            >
-              <UserRound
-                size={13}
-                className="
-                  text-white/30
-                "
-              />
-
-              <span
-                className="
-                  text-xs
-                  text-white/50
-                "
-              >
-                {
-                  investigationCase.investigator
-                }
-              </span>
-            </div>
-          </div>
-
-          <div>
-            <p
-              className="
-                text-[10px]
-                text-white/20
-              "
-            >
-              EVIDENCE
-            </p>
-
-            <p
-              className="
-                mt-1
-                text-xs
-                text-white/50
-              "
-            >
-              {
-                investigationCase.evidenceCount
-              }{" "}
-              items
-            </p>
-          </div>
-
-          <div>
-            <p
-              className="
-                text-[10px]
-                text-white/20
-              "
-            >
-              STATUS
-            </p>
-
-            <div
-              className="
-                mt-1
-              "
-            >
-              <StatusBadge
-                status={
-                  investigationCase.status
-                }
-              />
-            </div>
-          </div>
-
-          <ChevronRight
-            size={18}
-            className="
-              ml-auto
-              text-white/20
-              lg:ml-2
-            "
-          />
-        </div>
-      </div>
-    </motion.button>
-  )
-}
-
-/* =========================================================
-   CASE DETAILS
-========================================================= */
-
-function CaseDetails({
-  investigationCase,
-  onClose,
-}: {
-  investigationCase:
-    InvestigationCase
-  onClose:
-    () => void
-}) {
-  return (
-    <>
-      <ModalBackdrop
-        onClose={
-          onClose
-        }
-      />
-
-      <motion.aside
-        initial={{
-          x: "100%",
-        }}
-        animate={{
-          x: 0,
-        }}
-        exit={{
-          x: "100%",
-        }}
-        transition={{
-          type:
-            "spring",
-          stiffness:
-            260,
-          damping:
-            30,
-        }}
-        className="
-          glass
-          fixed
-          bottom-3
-          right-3
-          top-3
-          z-[80]
-          w-[calc(100%_-_24px)]
-          max-w-[540px]
-          overflow-y-auto
-          rounded-[32px]
-          p-6
-          md:p-8
-        "
-      >
-        <div
-          className="
-            flex
-            items-start
-            justify-between
-            gap-5
-          "
-        >
-          <div
-            className="
-              flex
-              h-12
-              w-12
-              items-center
-              justify-center
-              rounded-[19px]
-              border
-              border-white/10
-              bg-white/[0.05]
-            "
-          >
-            <FolderKanban
-              size={20}
-              className="
-                text-white/55
-              "
-            />
-          </div>
-
-          <CloseButton
-            onClick={
-              onClose
-            }
-          />
-        </div>
-
-        <div
-          className="
-            mt-8
-          "
-        >
-          <div
-            className="
-              flex
-              flex-wrap
-              items-center
-              gap-2
-            "
-          >
-            <StatusBadge
-              status={
-                investigationCase.status
-              }
-            />
-
-            <PriorityBadge
-              priority={
-                investigationCase.priority
-              }
-            />
-          </div>
-
-          <p
-            className="
-              mt-5
-              text-xs
-              font-medium
-              tracking-[0.13em]
-              text-white/25
-            "
-          >
-            {
-              investigationCase.id
-            }
-          </p>
-
-          <h2
-            className="
-              mt-2
-              text-3xl
-              font-semibold
-              tracking-[-0.04em]
-            "
-          >
-            {
-              investigationCase.title
-            }
-          </h2>
-
-          <p
-            className="
-              mt-4
-              text-sm
-              leading-7
-              text-white/35
-            "
-          >
-            {
-              investigationCase.description
-            }
-          </p>
-        </div>
-
-        <Divider />
-
-        <div
-          className="
-            grid
-            grid-cols-1
-            gap-3
-            sm:grid-cols-2
-          "
-        >
-          <DetailCard
-            label="Investigator"
-            value={
-              investigationCase.investigator
-            }
-            icon={
-              <UserRound
-                size={15}
-              />
-            }
-          />
-
-          <DetailCard
-            label="Evidence"
-            value={`${investigationCase.evidenceCount} items`}
-            icon={
-              <FileText
-                size={15}
-              />
-            }
-          />
-
-          <DetailCard
-            label="Created"
-            value={
-              investigationCase.createdAt
-            }
-            icon={
-              <CalendarDays
-                size={15}
-              />
-            }
-          />
-
-          <DetailCard
-            label="Last updated"
-            value={
-              investigationCase.updatedAt
-            }
-            icon={
-              <Clock3
-                size={15}
-              />
-            }
-          />
-        </div>
-
-        <div
-          className="
-            mt-8
-            rounded-[24px]
-            border
-            border-white/[0.07]
-            bg-white/[0.025]
-            p-5
-          "
-        >
-          <div
-            className="
-              flex
-              items-center
-              gap-3
-            "
-          >
-            <ShieldCheck
-              size={18}
-              className="
-                text-emerald-300/75
-              "
-            />
-
-            <div>
-              <p
-                className="
-                  text-sm
-                  text-white/70
-                "
-              >
-                Case integrity
-                protected
-              </p>
-
-              <p
-                className="
-                  mt-1
-                  text-xs
-                  text-white/25
-                "
-              >
-                Blockchain anchoring
-                will be connected
-                later.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div
-          className="
-            mt-8
-          "
-        >
-          <SectionLabel>
-            Recent activity
-          </SectionLabel>
-
-          <div
-            className="
-              mt-5
-              space-y-5
-            "
-          >
-            <ActivityItem
-              title="Case updated"
-              description={
-                investigationCase.updatedAt
-              }
-            />
-
-            <ActivityItem
-              title="Evidence registered"
-              description={`${investigationCase.evidenceCount} evidence records associated`}
-            />
-
-            <ActivityItem
-              title="Case created"
-              description={
-                investigationCase.createdAt
-              }
-            />
-          </div>
-        </div>
-      </motion.aside>
     </>
   )
 }
@@ -3161,58 +2420,39 @@ function CaseDetails({
 
 function EvidencePage({
   evidence,
-  setEvidence,
   cases,
-  setCases,
+  onUploadEvidence,
 }: {
   evidence:
     EvidenceRecord[]
 
-  setEvidence:
-    Dispatch<
-      SetStateAction<
-        EvidenceRecord[]
-      >
-    >
-
   cases:
     InvestigationCase[]
 
-  setCases:
-    Dispatch<
-      SetStateAction<
-        InvestigationCase[]
-      >
-    >
+  onUploadEvidence: (
+    payload:
+      UploadEvidencePayload,
+  ) => Promise<EvidenceRecord>
 }) {
   const [
-    searchQuery,
-    setSearchQuery,
+    search,
+    setSearch,
   ] =
     useState("")
-
-  const [
-    integrityFilter,
-    setIntegrityFilter,
-  ] =
-    useState<
-      | "All"
-      | EvidenceIntegrity
-    >("All")
-
-  const [
-    selectedEvidence,
-    setSelectedEvidence,
-  ] =
-    useState<
-      EvidenceRecord | null
-    >(null)
 
   const [
     registerOpen,
     setRegisterOpen,
   ] =
     useState(false)
+
+  const [
+    selected,
+    setSelected,
+  ] =
+    useState<
+      EvidenceRecord | null
+    >(null)
 
   const [
     selectedFile,
@@ -3223,41 +2463,18 @@ function EvidencePage({
     )
 
   const [
-    hashValue,
-    setHashValue,
-  ] =
-    useState<string | null>(
-      null,
-    )
-
-  const [
-    hashing,
-    setHashing,
-  ] =
-    useState(false)
-
-  const [
-    hashError,
-    setHashError,
-  ] =
-    useState<string | null>(
-      null,
-    )
-
-  const [
-    selectedCaseId,
-    setSelectedCaseId,
-  ] =
-    useState(
-      cases[0]?.id ??
-        "",
-    )
-
-  const [
-    description,
-    setDescription,
+    caseId,
+    setCaseId,
   ] =
     useState("")
+
+  const [
+    type,
+    setType,
+  ] =
+    useState<EvidenceType>(
+      "Other",
+    )
 
   const [
     custodian,
@@ -3268,12 +2485,44 @@ function EvidencePage({
     )
 
   const [
-    evidenceType,
-    setEvidenceType,
+    description,
+    setDescription,
   ] =
-    useState<EvidenceType>(
-      "Other",
-    )
+    useState("")
+
+  const [
+    hashing,
+    setHashing,
+  ] =
+    useState(false)
+
+  const [
+    browserHash,
+    setBrowserHash,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    hashSkipped,
+    setHashSkipped,
+  ] =
+    useState(false)
+
+  const [
+    uploading,
+    setUploading,
+  ] =
+    useState(false)
+
+  const [
+    error,
+    setError,
+  ] =
+    useState<
+      string | null
+    >(null)
 
   const [
     dragActive,
@@ -3286,15 +2535,29 @@ function EvidencePage({
       null,
     )
 
-  const filteredEvidence =
+  useEffect(() => {
+    if (
+      !caseId &&
+      cases.length > 0
+    ) {
+      setCaseId(
+        cases[0].id,
+      )
+    }
+  }, [
+    cases,
+    caseId,
+  ])
+
+  const filtered =
     evidence.filter(
       (item) => {
         const query =
-          searchQuery
+          search
             .trim()
             .toLowerCase()
 
-        const matchesSearch =
+        return (
           item.name
             .toLowerCase()
             .includes(
@@ -3315,16 +2578,6 @@ function EvidencePage({
             .includes(
               query,
             )
-
-        const matchesIntegrity =
-          integrityFilter ===
-            "All" ||
-          item.integrity ===
-            integrityFilter
-
-        return (
-          matchesSearch &&
-          matchesIntegrity
         )
       },
     )
@@ -3336,36 +2589,56 @@ function EvidencePage({
       file,
     )
 
-    setHashValue(
-      null,
-    )
-
-    setHashError(
-      null,
-    )
-
-    setEvidenceType(
+    setType(
       detectEvidenceType(
         file.name,
       ),
     )
+
+    setBrowserHash(
+      null,
+    )
+
+    setHashSkipped(
+      false,
+    )
+
+    setError(
+      null,
+    )
+
+    /*
+     * Browser hashing is only a preview.
+     * The backend will ALWAYS calculate the authoritative
+     * hash from the uploaded bytes.
+     */
+    if (
+      file.size >
+      BROWSER_HASH_LIMIT
+    ) {
+      setHashSkipped(
+        true,
+      )
+
+      return
+    }
 
     setHashing(
       true,
     )
 
     try {
-      const calculatedHash =
+      const hash =
         await calculateSHA256(
           file,
         )
 
-      setHashValue(
-        calculatedHash,
+      setBrowserHash(
+        hash,
       )
     } catch {
-      setHashError(
-        "TRACE-X could not calculate the SHA-256 hash for this file.",
+      setError(
+        "The browser could not calculate the preview SHA-256. The backend can still calculate the authoritative hash during upload.",
       )
     } finally {
       setHashing(
@@ -3374,8 +2647,119 @@ function EvidencePage({
     }
   }
 
+  function reset() {
+    setSelectedFile(
+      null,
+    )
+
+    setCaseId(
+      cases[0]?.id ??
+        "",
+    )
+
+    setType(
+      "Other",
+    )
+
+    setCustodian(
+      "Investigator A",
+    )
+
+    setDescription(
+      "",
+    )
+
+    setBrowserHash(
+      null,
+    )
+
+    setHashSkipped(
+      false,
+    )
+
+    setHashing(
+      false,
+    )
+
+    setUploading(
+      false,
+    )
+
+    setError(
+      null,
+    )
+  }
+
+  async function uploadEvidence() {
+    if (
+      !selectedFile ||
+      !caseId ||
+      uploading
+    ) {
+      return
+    }
+
+    setUploading(
+      true,
+    )
+
+    setError(
+      null,
+    )
+
+    try {
+      const storedEvidence =
+        await onUploadEvidence(
+          {
+            file:
+              selectedFile,
+
+            caseId,
+
+            description:
+              description.trim(),
+
+            type,
+
+            custodian,
+          },
+        )
+
+      /*
+       * For small files we calculated a browser preview.
+       * Compare it with the authoritative backend result.
+       */
+      if (
+        browserHash &&
+        browserHash !==
+          storedEvidence.hash
+      ) {
+        console.warn(
+          "TRACE-X hash disagreement detected between browser and backend.",
+        )
+      }
+
+      setRegisterOpen(
+        false,
+      )
+
+      reset()
+    } catch (uploadError) {
+      setError(
+        getErrorMessage(
+          uploadError,
+        ),
+      )
+    } finally {
+      setUploading(
+        false,
+      )
+    }
+  }
+
   function handleDrop(
-    event: DragEvent<HTMLDivElement>,
+    event:
+      DragEvent<HTMLDivElement>,
   ) {
     event.preventDefault()
 
@@ -3394,393 +2778,45 @@ function EvidencePage({
     }
   }
 
-  function resetRegistration() {
-    setSelectedFile(
-      null,
-    )
-
-    setHashValue(
-      null,
-    )
-
-    setHashError(
-      null,
-    )
-
-    setDescription(
-      "",
-    )
-
-    setCustodian(
-      "Investigator A",
-    )
-
-    setEvidenceType(
-      "Other",
-    )
-
-    setSelectedCaseId(
-      cases[0]?.id ??
-        "",
-    )
-
-    setHashing(
-      false,
-    )
-
-    setDragActive(
-      false,
-    )
-  }
-
-  function closeRegistration() {
-    setRegisterOpen(
-      false,
-    )
-
-    resetRegistration()
-  }
-
-  function registerEvidence() {
-    if (
-      !selectedFile ||
-      !hashValue ||
-      !selectedCaseId
-    ) {
-      return
-    }
-
-    const selectedCase =
-      cases.find(
-        (item) =>
-          item.id ===
-          selectedCaseId,
-      )
-
-    if (
-      !selectedCase
-    ) {
-      return
-    }
-
-    const numericIds =
-      evidence.map(
-        (item) =>
-          Number(
-            item.id
-              .split("-")
-              .pop(),
-          ),
-      )
-
-    const highest =
-      numericIds.length >
-      0
-        ? Math.max(
-            ...numericIds,
-          )
-        : 0
-
-    const next =
-      String(
-        highest + 1,
-      ).padStart(
-        4,
-        "0",
-      )
-
-    const today =
-      new Date().toLocaleDateString(
-        "en-GB",
-        {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        },
-      )
-
-    const newEvidence: EvidenceRecord =
-      {
-        id:
-          `EV-2026-${next}`,
-
-        name:
-          selectedFile.name,
-
-        description:
-          description.trim() ||
-          "No evidence description has been provided.",
-
-        caseId:
-          selectedCase.id,
-
-        caseTitle:
-          selectedCase.title,
-
-        type:
-          evidenceType,
-
-        size:
-          selectedFile.size,
-
-        hash:
-          hashValue,
-
-        custodian:
-          custodian,
-
-        integrity:
-          "Verified",
-
-        status:
-          "Registered",
-
-        createdAt:
-          today,
-
-        updatedAt:
-          "Just now",
-
-        versions: [
-          {
-            version: 1,
-            hash:
-              hashValue,
-            createdAt:
-              today,
-            note:
-              "Original evidence acquisition",
-          },
-        ],
-      }
-
-    setEvidence(
-      (
-        current,
-      ) => [
-        newEvidence,
-        ...current,
-      ],
-    )
-
-    setCases(
-      (
-        current,
-      ) =>
-        current.map(
-          (item) =>
-            item.id ===
-            selectedCase.id
-              ? {
-                  ...item,
-                  evidenceCount:
-                    item.evidenceCount +
-                    1,
-                  updatedAt:
-                    "Just now",
-                }
-              : item,
-        ),
-    )
-
-    closeRegistration()
-  }
-
   return (
     <>
-      {/* TOOLBAR */}
-
       <div
         className="
           mb-5
           flex
           flex-col
           gap-3
-          xl:flex-row
-          xl:items-center
-          xl:justify-between
+          md:flex-row
+          md:items-center
+          md:justify-between
         "
       >
-        <div
-          className="
-            flex
-            flex-1
-            flex-col
-            gap-3
-            lg:flex-row
-          "
-        >
-          <div
-            className="
-              glass
-              flex
-              h-12
-              w-full
-              items-center
-              gap-3
-              rounded-2xl
-              px-4
-              lg:max-w-[380px]
-            "
-          >
-            <Search
-              size={17}
-              className="
-                shrink-0
-                text-white/30
-              "
-            />
+        <SearchBox
+          value={
+            search
+          }
+          onChange={
+            setSearch
+          }
+          placeholder="Search evidence, case or SHA-256..."
+        />
 
-            <input
-              value={
-                searchQuery
-              }
-              onChange={(
-                event,
-              ) =>
-                setSearchQuery(
-                  event.target
-                    .value,
-                )
-              }
-              placeholder="Search evidence, case, or hash..."
-              className="
-                h-full
-                w-full
-                bg-transparent
-                text-sm
-                text-white
-                placeholder:text-white/25
-              "
-            />
-          </div>
-
-          <div
-            className="
-              glass
-              flex
-              items-center
-              gap-1
-              overflow-x-auto
-              rounded-2xl
-              p-1
-            "
-          >
-            {(
-              [
-                "All",
-                "Verified",
-                "Pending",
-                "Mismatch",
-              ] as const
-            ).map(
-              (
-                filter,
-              ) => {
-                const active =
-                  integrityFilter ===
-                  filter
-
-                return (
-                  <motion.button
-                    type="button"
-                    key={
-                      filter
-                    }
-                    whileTap={{
-                      scale:
-                        0.96,
-                    }}
-                    onClick={() =>
-                      setIntegrityFilter(
-                        filter,
-                      )
-                    }
-                    className={`
-                      relative
-                      h-10
-                      whitespace-nowrap
-                      rounded-xl
-                      px-4
-                      text-xs
-                      transition-colors
-
-                      ${
-                        active
-                          ? "text-white"
-                          : "text-white/35 hover:text-white/65"
-                      }
-                    `}
-                  >
-                    {active && (
-                      <motion.div
-                        layoutId="evidence-filter"
-                        className="
-                          absolute
-                          inset-0
-                          rounded-xl
-                          border
-                          border-white/10
-                          bg-white/[0.08]
-                        "
-                      />
-                    )}
-
-                    <span
-                      className="
-                        relative
-                        z-10
-                      "
-                    >
-                      {
-                        filter
-                      }
-                    </span>
-                  </motion.button>
-                )
-              },
-            )}
-          </div>
-        </div>
-
-        <motion.button
-          type="button"
-          whileHover={{
-            scale: 1.02,
-          }}
-          whileTap={{
-            scale: 0.97,
-          }}
+        <PrimaryButton
           onClick={() => {
-            resetRegistration()
+            reset()
 
             setRegisterOpen(
               true,
             )
           }}
-          className="
-            flex
-            h-12
-            items-center
-            justify-center
-            gap-2
-            rounded-2xl
-            bg-white
-            px-5
-            text-sm
-            font-semibold
-            text-black
-          "
         >
           <UploadCloud
             size={17}
           />
 
           Register Evidence
-        </motion.button>
+        </PrimaryButton>
       </div>
-
-      {/* SUMMARY */}
 
       <div
         className="
@@ -3792,14 +2828,9 @@ function EvidencePage({
         "
       >
         <MiniStat
-          label="Total Evidence"
+          label="Total"
           value={
             evidence.length
-          }
-          icon={
-            <Database
-              size={16}
-            />
           }
         />
 
@@ -3812,11 +2843,6 @@ function EvidencePage({
                 "Verified",
             ).length
           }
-          icon={
-            <ShieldCheck
-              size={16}
-            />
-          }
         />
 
         <MiniStat
@@ -3828,15 +2854,10 @@ function EvidencePage({
                 "Pending",
             ).length
           }
-          icon={
-            <Clock3
-              size={16}
-            />
-          }
         />
 
         <MiniStat
-          label="Mismatches"
+          label="Mismatch"
           value={
             evidence.filter(
               (item) =>
@@ -3844,105 +2865,208 @@ function EvidencePage({
                 "Mismatch",
             ).length
           }
-          icon={
-            <CircleAlert
-              size={16}
-            />
-          }
         />
       </div>
 
       <div
         className="
-          mb-4
-          flex
-          items-center
-          justify-between
-          px-1
-        "
-      >
-        <p
-          className="
-            text-xs
-            text-white/30
-          "
-        >
-          {
-            filteredEvidence.length
-          }{" "}
-          {filteredEvidence.length ===
-          1
-            ? "evidence record"
-            : "evidence records"}
-        </p>
-
-        <p
-          className="
-            text-xs
-            text-white/20
-          "
-        >
-          SHA-256 enabled
-        </p>
-      </div>
-
-      {/* EVIDENCE LIST */}
-
-      <div
-        className="
           grid
-          grid-cols-1
           gap-4
         "
       >
-        {filteredEvidence.map(
-          (
-            item,
-            index,
-          ) => (
-            <EvidenceCard
+        {filtered.map(
+          (item) => (
+            <motion.button
+              type="button"
               key={
                 item.id
               }
-              evidence={
-                item
-              }
-              index={
-                index
-              }
-              onOpen={() =>
-                setSelectedEvidence(
+              whileHover={{
+                y: -2,
+              }}
+              onClick={() =>
+                setSelected(
                   item,
                 )
               }
-            />
+              className="
+                glass
+                rounded-[26px]
+                p-5
+                text-left
+                md:p-6
+              "
+            >
+              <div
+                className="
+                  flex
+                  flex-col
+                  gap-5
+                  xl:flex-row
+                  xl:items-center
+                "
+              >
+                <div
+                  className="
+                    flex
+                    min-w-0
+                    flex-1
+                    gap-4
+                  "
+                >
+                  <div
+                    className="
+                      flex
+                      h-12
+                      w-12
+                      shrink-0
+                      items-center
+                      justify-center
+                      rounded-2xl
+                      border
+                      border-white/10
+                      bg-white/[0.05]
+                    "
+                  >
+                    <EvidenceTypeIcon
+                      type={
+                        item.type
+                      }
+                    />
+                  </div>
+
+                  <div
+                    className="
+                      min-w-0
+                      flex-1
+                    "
+                  >
+                    <div
+                      className="
+                        flex
+                        flex-wrap
+                        items-center
+                        gap-2
+                      "
+                    >
+                      <h3
+                        className="
+                          truncate
+                          text-base
+                          font-medium
+                          text-white/80
+                        "
+                      >
+                        {
+                          item.name
+                        }
+                      </h3>
+
+                      <IntegrityBadge
+                        integrity={
+                          item.integrity
+                        }
+                      />
+                    </div>
+
+                    <p
+                      className="
+                        mt-1
+                        text-xs
+                        text-white/25
+                      "
+                    >
+                      {
+                        item.id
+                      }{" "}
+                      •{" "}
+                      {
+                        item.type
+                      }
+                    </p>
+
+                    <p
+                      className="
+                        mt-3
+                        truncate
+                        font-mono
+                        text-[11px]
+                        text-white/25
+                      "
+                    >
+                      SHA-256:{" "}
+                      {
+                        item.hash
+                      }
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  className="
+                    flex
+                    flex-wrap
+                    items-center
+                    gap-6
+                  "
+                >
+                  <MetaItem
+                    label="CASE"
+                    value={
+                      item.caseId
+                    }
+                  />
+
+                  <MetaItem
+                    label="SIZE"
+                    value={
+                      formatBytes(
+                        item.size,
+                      )
+                    }
+                  />
+
+                  <MetaItem
+                    label="CUSTODIAN"
+                    value={
+                      item.custodian
+                    }
+                  />
+
+                  <ChevronRight
+                    size={18}
+                    className="
+                      text-white/20
+                    "
+                  />
+                </div>
+              </div>
+            </motion.button>
           ),
         )}
 
-        {filteredEvidence.length ===
+        {filtered.length ===
           0 && (
           <EmptyState
             title="No evidence found"
-            description="Try changing your search or integrity filter."
+            description="No evidence matches your search."
             icon={
-              <Search
-                size={26}
+              <FileText
+                size={27}
               />
             }
           />
         )}
       </div>
 
-      {/* EVIDENCE DETAILS */}
-
       <AnimatePresence>
-        {selectedEvidence && (
+        {selected && (
           <EvidenceDetails
             evidence={
-              selectedEvidence
+              selected
             }
             onClose={() =>
-              setSelectedEvidence(
+              setSelected(
                 null,
               )
             }
@@ -3950,63 +3074,27 @@ function EvidencePage({
         )}
       </AnimatePresence>
 
-      {/* REGISTER EVIDENCE MODAL */}
-
       <AnimatePresence>
         {registerOpen && (
           <>
             <ModalBackdrop
-              onClose={
-                closeRegistration
+              onClose={() =>
+                setRegisterOpen(
+                  false,
+                )
               }
             />
 
-            <motion.div
-              initial={{
-                opacity: 0,
-                scale: 0.95,
-                y: 25,
-              }}
-              animate={{
-                opacity: 1,
-                scale: 1,
-                y: 0,
-              }}
-              exit={{
-                opacity: 0,
-                scale: 0.96,
-                y: 15,
-              }}
-              transition={{
-                type:
-                  "spring",
-                stiffness:
-                  300,
-                damping:
-                  28,
-              }}
-              className="
-                glass
-                fixed
-                left-1/2
-                top-1/2
-                z-[80]
-                max-h-[calc(100vh_-_2rem)]
-                w-[calc(100%_-_2rem)]
-                max-w-[680px]
-                -translate-x-1/2
-                -translate-y-1/2
-                overflow-y-auto
-                rounded-[32px]
-                p-6
-                md:p-8
-              "
+            <ModalCard
+              large
             >
               <ModalHeader
                 title="Register Evidence"
-                description="Select a digital evidence file and TRACE-X will calculate its SHA-256 fingerprint."
-                onClose={
-                  closeRegistration
+                description="Upload the actual evidence file. TRACE-X will store it off-chain and calculate SHA-256 again on the backend."
+                onClose={() =>
+                  setRegisterOpen(
+                    false,
+                  )
                 }
               />
 
@@ -4016,8 +3104,6 @@ function EvidencePage({
                   space-y-5
                 "
               >
-                {/* DROP ZONE */}
-
                 <div
                   onDragEnter={(
                     event,
@@ -4046,21 +3132,23 @@ function EvidencePage({
                     handleDrop
                   }
                   onClick={() =>
-                    fileInputRef.current?.click()
+                    fileInputRef
+                      .current
+                      ?.click()
                   }
                   className={`
                     cursor-pointer
                     rounded-[26px]
                     border
                     border-dashed
-                    p-7
+                    p-8
+                    text-center
                     transition
-                    md:p-8
 
                     ${
                       dragActive
                         ? "border-blue-300/40 bg-blue-400/[0.08]"
-                        : "border-white/15 bg-white/[0.025] hover:border-white/25 hover:bg-white/[0.04]"
+                        : "border-white/15 bg-white/[0.025] hover:border-white/25"
                     }
                   `}
                 >
@@ -4069,7 +3157,9 @@ function EvidencePage({
                       fileInputRef
                     }
                     type="file"
-                    className="hidden"
+                    className="
+                      hidden
+                    "
                     onChange={(
                       event,
                     ) => {
@@ -4078,9 +3168,7 @@ function EvidencePage({
                           .target
                           .files?.[0]
 
-                      if (
-                        file
-                      ) {
+                      if (file) {
                         void processFile(
                           file,
                         )
@@ -4088,203 +3176,178 @@ function EvidencePage({
                     }}
                   />
 
-                  <div
+                  <UploadCloud
+                    size={28}
                     className="
-                      text-center
+                      mx-auto
+                      text-white/40
+                    "
+                  />
+
+                  <p
+                    className="
+                      mt-4
+                      text-sm
+                      text-white/70
                     "
                   >
-                    <div
-                      className="
-                        mx-auto
-                        flex
-                        h-14
-                        w-14
-                        items-center
-                        justify-center
-                        rounded-[20px]
-                        border
-                        border-white/10
-                        bg-white/[0.05]
-                      "
-                    >
-                      <UploadCloud
-                        size={23}
-                        className="
-                          text-white/55
-                        "
-                      />
-                    </div>
+                    {selectedFile
+                      ? selectedFile.name
+                      : "Drop evidence here or click to browse"}
+                  </p>
 
-                    <p
-                      className="
-                        mt-4
-                        text-sm
-                        font-medium
-                        text-white/75
-                      "
-                    >
-                      {selectedFile
-                        ? selectedFile.name
-                        : "Drop evidence here"}
-                    </p>
-
-                    <p
-                      className="
-                        mt-2
-                        text-xs
-                        leading-5
-                        text-white/25
-                      "
-                    >
-                      {selectedFile
-                        ? `${formatBytes(
-                            selectedFile.size,
-                          )} • Click to choose another file`
-                        : "Drag and drop a file, or click to browse"}
-                    </p>
-                  </div>
+                  <p
+                    className="
+                      mt-2
+                      text-xs
+                      text-white/25
+                    "
+                  >
+                    {selectedFile
+                      ? formatBytes(
+                          selectedFile.size,
+                        )
+                      : "The actual file will be uploaded to TRACE-X"}
+                  </p>
                 </div>
 
-                {/* HASH RESULT */}
+                {hashing && (
+                  <InfoPanel>
+                    <LoaderCircle
+                      size={17}
+                      className="
+                        animate-spin
+                        text-blue-300
+                      "
+                    />
 
-                {(hashing ||
-                  hashValue ||
-                  hashError) && (
+                    <div>
+                      <p
+                        className="
+                          text-sm
+                          text-white/65
+                        "
+                      >
+                        Calculating
+                        browser preview
+                        hash
+                      </p>
+
+                      <p
+                        className="
+                          mt-1
+                          text-xs
+                          text-white/25
+                        "
+                      >
+                        The backend will
+                        calculate its own
+                        authoritative
+                        SHA-256 after
+                        upload.
+                      </p>
+                    </div>
+                  </InfoPanel>
+                )}
+
+                {browserHash &&
+                  !hashing && (
                   <div
                     className="
                       rounded-[22px]
                       border
-                      border-white/[0.08]
-                      bg-black/20
+                      border-emerald-400/10
+                      bg-emerald-400/[0.035]
                       p-4
                     "
                   >
-                    {hashing && (
-                      <div
+                    <div
+                      className="
+                        flex
+                        items-center
+                        gap-2
+                      "
+                    >
+                      <CheckCircle2
+                        size={16}
                         className="
-                          flex
-                          items-center
-                          gap-3
+                          text-emerald-300
+                        "
+                      />
+
+                      <p
+                        className="
+                          text-xs
+                          text-emerald-200/70
                         "
                       >
-                        <LoaderCircle
-                          size={18}
-                          className="
-                            animate-spin
-                            text-blue-300
-                          "
-                        />
+                        Browser preview
+                        SHA-256
+                      </p>
+                    </div>
 
-                        <div>
-                          <p
-                            className="
-                              text-sm
-                              text-white/65
-                            "
-                          >
-                            Calculating
-                            SHA-256
-                          </p>
-
-                          <p
-                            className="
-                              mt-1
-                              text-xs
-                              text-white/25
-                            "
-                          >
-                            Reading the
-                            exact contents
-                            of the selected
-                            file.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    {hashValue &&
-                      !hashing && (
-                        <>
-                          <div
-                            className="
-                              flex
-                              items-center
-                              gap-2
-                            "
-                          >
-                            <ShieldCheck
-                              size={16}
-                              className="
-                                text-emerald-300
-                              "
-                            />
-
-                            <p
-                              className="
-                                text-sm
-                                text-emerald-200/75
-                              "
-                            >
-                              SHA-256
-                              generated
-                            </p>
-                          </div>
-
-                          <p
-                            className="
-                              mt-3
-                              break-all
-                              font-mono
-                              text-[11px]
-                              leading-5
-                              text-white/40
-                            "
-                          >
-                            {
-                              hashValue
-                            }
-                          </p>
-                        </>
-                      )}
-
-                    {hashError && (
-                      <div
-                        className="
-                          flex
-                          items-start
-                          gap-3
-                        "
-                      >
-                        <CircleAlert
-                          size={18}
-                          className="
-                            mt-0.5
-                            text-red-300
-                          "
-                        />
-
-                        <p
-                          className="
-                            text-sm
-                            leading-6
-                            text-red-200/70
-                          "
-                        >
-                          {
-                            hashError
-                          }
-                        </p>
-                      </div>
-                    )}
+                    <p
+                      className="
+                        mt-3
+                        break-all
+                        font-mono
+                        text-[11px]
+                        leading-5
+                        text-white/40
+                      "
+                    >
+                      {
+                        browserHash
+                      }
+                    </p>
                   </div>
                 )}
 
-                {/* METADATA */}
+                {hashSkipped && (
+                  <InfoPanel>
+                    <HardDrive
+                      size={17}
+                      className="
+                        text-amber-300
+                      "
+                    />
+
+                    <div>
+                      <p
+                        className="
+                          text-sm
+                          text-white/65
+                        "
+                      >
+                        Browser hash
+                        skipped
+                      </p>
+
+                      <p
+                        className="
+                          mt-1
+                          text-xs
+                          leading-5
+                          text-white/25
+                        "
+                      >
+                        This file is
+                        larger than
+                        256 MB. TRACE-X
+                        avoids loading it
+                        completely into
+                        browser memory.
+                        The backend will
+                        hash it using a
+                        stream.
+                      </p>
+                    </div>
+                  </InfoPanel>
+                )}
 
                 <div
                   className="
                     grid
-                    grid-cols-1
                     gap-4
                     sm:grid-cols-2
                   "
@@ -4294,22 +3357,23 @@ function EvidencePage({
                   >
                     <select
                       value={
-                        selectedCaseId
+                        caseId
                       }
                       onChange={(
                         event,
                       ) =>
-                        setSelectedCaseId(
-                          event.target
+                        setCaseId(
+                          event
+                            .target
                             .value,
                         )
                       }
-                      className={selectClass}
+                      className={
+                        selectClass
+                      }
                     >
                       {cases.map(
-                        (
-                          item,
-                        ) => (
+                        (item) => (
                           <option
                             key={
                               item.id
@@ -4336,50 +3400,53 @@ function EvidencePage({
                   >
                     <select
                       value={
-                        evidenceType
+                        type
                       }
                       onChange={(
                         event,
                       ) =>
-                        setEvidenceType(
-                          event.target
+                        setType(
+                          event
+                            .target
                             .value as EvidenceType,
                         )
                       }
-                      className={selectClass}
+                      className={
+                        selectClass
+                      }
                     >
-                      <option value="Document">
+                      <option>
                         Document
                       </option>
 
-                      <option value="Disk Image">
+                      <option>
                         Disk Image
                       </option>
 
-                      <option value="Network Capture">
+                      <option>
                         Network Capture
                       </option>
 
-                      <option value="Log Archive">
+                      <option>
                         Log Archive
                       </option>
 
-                      <option value="Image">
+                      <option>
                         Image
                       </option>
 
-                      <option value="Video">
+                      <option>
                         Video
                       </option>
 
-                      <option value="Other">
+                      <option>
                         Other
                       </option>
                     </select>
                   </FormField>
 
                   <FormField
-                    label="Current custodian"
+                    label="Custodian"
                   >
                     <select
                       value={
@@ -4389,11 +3456,14 @@ function EvidencePage({
                         event,
                       ) =>
                         setCustodian(
-                          event.target
+                          event
+                            .target
                             .value,
                         )
                       }
-                      className={selectClass}
+                      className={
+                        selectClass
+                      }
                     >
                       <option>
                         Investigator A
@@ -4415,9 +3485,10 @@ function EvidencePage({
                 </div>
 
                 <FormField
-                  label="Evidence description"
+                  label="Description"
                 >
                   <textarea
+                    rows={4}
                     value={
                       description
                     }
@@ -4425,19 +3496,21 @@ function EvidencePage({
                       event,
                     ) =>
                       setDescription(
-                        event.target
+                        event
+                          .target
                           .value,
                       )
                     }
-                    placeholder="Describe where the evidence came from and how it was acquired..."
-                    rows={4}
-                    className={textareaClass}
+                    className={
+                      textareaClass
+                    }
+                    placeholder="Describe acquisition source, device, context, etc..."
                   />
                 </FormField>
 
                 <div
                   className="
-                    rounded-[20px]
+                    rounded-[22px]
                     border
                     border-blue-400/10
                     bg-blue-400/[0.035]
@@ -4451,12 +3524,12 @@ function EvidencePage({
                       gap-3
                     "
                   >
-                    <HardDrive
+                    <Server
                       size={17}
                       className="
                         mt-0.5
                         shrink-0
-                        text-blue-300/70
+                        text-blue-300
                       "
                     />
 
@@ -4467,37 +3540,52 @@ function EvidencePage({
                         text-white/30
                       "
                     >
-                      This stage stores
-                      only evidence
-                      metadata and the
-                      SHA-256 value in
-                      browser memory.
-                      The actual file is
-                      not persisted yet.
-                      Secure off-chain
-                      storage will be
-                      connected later.
+                      The selected file
+                      will now be sent
+                      to Express. The
+                      server writes it
+                      to off-chain
+                      storage and
+                      calculates SHA-256
+                      from those stored
+                      bytes. That server
+                      hash becomes the
+                      authoritative
+                      TRACE-X record.
                     </p>
                   </div>
                 </div>
+
+                {error && (
+                  <FormError
+                    message={
+                      error
+                    }
+                  />
+                )}
               </div>
 
               <ModalActions
-                onCancel={
-                  closeRegistration
+                onCancel={() =>
+                  setRegisterOpen(
+                    false,
+                  )
                 }
-                onConfirm={
-                  registerEvidence
+                onConfirm={() =>
+                  void uploadEvidence()
                 }
-                confirmText="Register Evidence"
                 disabled={
                   !selectedFile ||
-                  !hashValue ||
-                  hashing ||
-                  !selectedCaseId
+                  !caseId ||
+                  hashing
                 }
+                busy={
+                  uploading
+                }
+                confirmText="Store Evidence"
+                busyText="Uploading..."
               />
-            </motion.div>
+            </ModalCard>
           </>
         )}
       </AnimatePresence>
@@ -4506,209 +3594,749 @@ function EvidencePage({
 }
 
 /* =========================================================
-   EVIDENCE CARD
+   VERIFY PAGE
 ========================================================= */
 
-function EvidenceCard({
+function VerifyPage({
   evidence,
-  index,
-  onOpen,
+  onVerify,
 }: {
   evidence:
-    EvidenceRecord
-  index: number
-  onOpen: () => void
+    EvidenceRecord[]
+
+  onVerify: (
+    evidenceId: string,
+  ) => Promise<VerifyEvidenceResponse>
 }) {
+  const [
+    search,
+    setSearch,
+  ] =
+    useState("")
+
+  const [
+    selectedId,
+    setSelectedId,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    verifying,
+    setVerifying,
+  ] =
+    useState(false)
+
+  const [
+    result,
+    setResult,
+  ] =
+    useState<
+      VerifyEvidenceResponse | null
+    >(null)
+
+  const [
+    error,
+    setError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const filtered =
+    evidence.filter(
+      (item) => {
+        const query =
+          search
+            .trim()
+            .toLowerCase()
+
+        return (
+          item.name
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          item.id
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          item.caseId
+            .toLowerCase()
+            .includes(
+              query,
+            )
+        )
+      },
+    )
+
+  const selectedEvidence =
+    evidence.find(
+      (item) =>
+        item.id ===
+        selectedId,
+    ) ??
+    null
+
+  async function verify() {
+    if (
+      !selectedId ||
+      verifying
+    ) {
+      return
+    }
+
+    setVerifying(
+      true,
+    )
+
+    setResult(
+      null,
+    )
+
+    setError(
+      null,
+    )
+
+    try {
+      const verification =
+        await onVerify(
+          selectedId,
+        )
+
+      setResult(
+        verification,
+      )
+    } catch (verifyError) {
+      setError(
+        getErrorMessage(
+          verifyError,
+        ),
+      )
+    } finally {
+      setVerifying(
+        false,
+      )
+    }
+  }
+
   return (
-    <motion.button
-      type="button"
-      initial={{
-        opacity: 0,
-        y: 15,
-      }}
-      animate={{
-        opacity: 1,
-        y: 0,
-      }}
-      transition={{
-        delay:
-          index *
-          0.04,
-      }}
-      whileHover={{
-        y: -2,
-      }}
-      whileTap={{
-        scale:
-          0.996,
-      }}
-      onClick={
-        onOpen
-      }
+    <div
       className="
-        glass
-        w-full
-        rounded-[26px]
-        p-5
-        text-left
-        md:p-6
+        grid
+        grid-cols-1
+        gap-4
+        xl:grid-cols-[1.05fr_0.95fr]
       "
     >
       <div
         className="
-          flex
-          flex-col
-          gap-5
-          xl:flex-row
-          xl:items-center
+          glass
+          rounded-[28px]
+          p-5
+          md:p-6
         "
       >
         <div
           className="
             flex
-            min-w-0
-            flex-1
-            items-start
-            gap-4
+            items-center
+            gap-3
           "
         >
-          <div
+          <ScanSearch
+            size={20}
             className="
-              flex
-              h-12
-              w-12
-              shrink-0
-              items-center
-              justify-center
-              rounded-2xl
-              border
-              border-white/10
-              bg-white/[0.05]
+              text-blue-300
             "
-          >
-            <EvidenceTypeIcon
-              type={
-                evidence.type
-              }
-            />
-          </div>
+          />
 
-          <div
-            className="
-              min-w-0
-              flex-1
-            "
-          >
-            <div
+          <div>
+            <h3
               className="
-                flex
-                flex-wrap
-                items-center
-                gap-2
+                text-base
+                font-medium
               "
             >
-              <h3
-                className="
-                  truncate
-                  text-base
-                  font-medium
-                  text-white/85
-                "
-              >
-                {
-                  evidence.name
-                }
-              </h3>
-
-              <IntegrityBadge
-                integrity={
-                  evidence.integrity
-                }
-              />
-            </div>
+              Select Evidence
+            </h3>
 
             <p
               className="
                 mt-1
-                text-[11px]
-                font-medium
-                tracking-wide
+                text-xs
                 text-white/25
               "
             >
-              {
-                evidence.id
-              }{" "}
-              •{" "}
-              {
-                evidence.type
-              }
-            </p>
-
-            <p
-              className="
-                mt-3
-                truncate
-                font-mono
-                text-[11px]
-                text-white/25
-              "
-            >
-              SHA-256:{" "}
-              {
-                evidence.hash
-              }
+              Choose a record to
+              re-hash from storage.
             </p>
           </div>
         </div>
 
         <div
           className="
-            flex
-            flex-wrap
-            items-center
-            gap-x-7
-            gap-y-3
+            mt-5
           "
         >
-          <MetaItem
-            label="CASE"
+          <SearchBox
             value={
-              evidence.caseId
+              search
             }
-          />
-
-          <MetaItem
-            label="CUSTODIAN"
-            value={
-              evidence.custodian
+            onChange={
+              setSearch
             }
-          />
-
-          <MetaItem
-            label="SIZE"
-            value={formatBytes(
-              evidence.size,
-            )}
-          />
-
-          <MetaItem
-            label="STATUS"
-            value={
-              evidence.status
-            }
-          />
-
-          <ChevronRight
-            size={18}
-            className="
-              ml-auto
-              text-white/20
-            "
+            placeholder="Search evidence..."
           />
         </div>
+
+        <div
+          className="
+            mt-5
+            max-h-[550px]
+            space-y-3
+            overflow-y-auto
+            pr-1
+          "
+        >
+          {filtered.map(
+            (item) => {
+              const active =
+                selectedId ===
+                item.id
+
+              return (
+                <motion.button
+                  type="button"
+                  key={
+                    item.id
+                  }
+                  whileTap={{
+                    scale:
+                      0.99,
+                  }}
+                  onClick={() => {
+                    setSelectedId(
+                      item.id,
+                    )
+
+                    setResult(
+                      null,
+                    )
+
+                    setError(
+                      null,
+                    )
+                  }}
+                  className={`
+                    w-full
+                    rounded-[20px]
+                    border
+                    p-4
+                    text-left
+                    transition
+
+                    ${
+                      active
+                        ? "border-blue-300/25 bg-blue-400/[0.07]"
+                        : "border-white/[0.07] bg-white/[0.025] hover:bg-white/[0.05]"
+                    }
+                  `}
+                >
+                  <div
+                    className="
+                      flex
+                      items-center
+                      justify-between
+                      gap-3
+                    "
+                  >
+                    <div
+                      className="
+                        min-w-0
+                      "
+                    >
+                      <p
+                        className="
+                          truncate
+                          text-sm
+                          text-white/70
+                        "
+                      >
+                        {
+                          item.name
+                        }
+                      </p>
+
+                      <p
+                        className="
+                          mt-1
+                          text-xs
+                          text-white/25
+                        "
+                      >
+                        {
+                          item.id
+                        }{" "}
+                        •{" "}
+                        {
+                          item.caseId
+                        }
+                      </p>
+                    </div>
+
+                    <IntegrityBadge
+                      integrity={
+                        item.integrity
+                      }
+                    />
+                  </div>
+                </motion.button>
+              )
+            },
+          )}
+        </div>
       </div>
-    </motion.button>
+
+      <div
+        className="
+          glass
+          rounded-[28px]
+          p-5
+          md:p-6
+        "
+      >
+        {!selectedEvidence ? (
+          <div
+            className="
+              flex
+              min-h-[450px]
+              items-center
+              justify-center
+              text-center
+            "
+          >
+            <div>
+              <Fingerprint
+                size={36}
+                className="
+                  mx-auto
+                  text-white/20
+                "
+              />
+
+              <h3
+                className="
+                  mt-5
+                  text-lg
+                  font-medium
+                "
+              >
+                Select an evidence
+                record
+              </h3>
+
+              <p
+                className="
+                  mx-auto
+                  mt-2
+                  max-w-sm
+                  text-sm
+                  leading-6
+                  text-white/25
+                "
+              >
+                TRACE-X will read
+                the stored evidence,
+                calculate SHA-256,
+                and compare it with
+                the original database
+                hash.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className="
+                flex
+                items-start
+                justify-between
+                gap-4
+              "
+            >
+              <div>
+                <p
+                  className="
+                    text-xs
+                    text-white/25
+                  "
+                >
+                  {
+                    selectedEvidence.id
+                  }
+                </p>
+
+                <h3
+                  className="
+                    mt-2
+                    break-all
+                    text-xl
+                    font-medium
+                  "
+                >
+                  {
+                    selectedEvidence.name
+                  }
+                </h3>
+
+                <p
+                  className="
+                    mt-2
+                    text-xs
+                    text-white/25
+                  "
+                >
+                  {
+                    selectedEvidence.caseTitle
+                  }
+                </p>
+              </div>
+
+              <IntegrityBadge
+                integrity={
+                  selectedEvidence.integrity
+                }
+              />
+            </div>
+
+            <Divider />
+
+            <p
+              className="
+                text-xs
+                text-white/25
+              "
+            >
+              AUTHORITATIVE SHA-256
+            </p>
+
+            <div
+              className="
+                mt-3
+                rounded-[20px]
+                border
+                border-white/[0.07]
+                bg-black/20
+                p-4
+              "
+            >
+              <p
+                className="
+                  break-all
+                  font-mono
+                  text-[11px]
+                  leading-5
+                  text-white/45
+                "
+              >
+                {
+                  selectedEvidence.hash
+                }
+              </p>
+            </div>
+
+            <motion.button
+              type="button"
+              disabled={
+                verifying
+              }
+              whileHover={
+                verifying
+                  ? {}
+                  : {
+                      scale:
+                        1.01,
+                    }
+              }
+              whileTap={
+                verifying
+                  ? {}
+                  : {
+                      scale:
+                        0.98,
+                    }
+              }
+              onClick={() =>
+                void verify()
+              }
+              className="
+                mt-5
+                flex
+                h-12
+                w-full
+                items-center
+                justify-center
+                gap-2
+                rounded-2xl
+                bg-white
+                text-sm
+                font-semibold
+                text-black
+                disabled:cursor-not-allowed
+                disabled:opacity-40
+              "
+            >
+              {verifying ? (
+                <>
+                  <LoaderCircle
+                    size={17}
+                    className="
+                      animate-spin
+                    "
+                  />
+
+                  Recalculating
+                  SHA-256...
+                </>
+              ) : (
+                <>
+                  <ScanSearch
+                    size={17}
+                  />
+
+                  Verify Stored File
+                </>
+              )}
+            </motion.button>
+
+            {error && (
+              <div
+                className="
+                  mt-5
+                "
+              >
+                <FormError
+                  message={
+                    error
+                  }
+                />
+
+                <p
+                  className="
+                    mt-3
+                    text-xs
+                    leading-5
+                    text-white/25
+                  "
+                >
+                  Older records created
+                  before real file
+                  storage are
+                  metadata-only and
+                  cannot be re-hashed.
+                  Register a new file
+                  through the Evidence
+                  page to test full
+                  verification.
+                </p>
+              </div>
+            )}
+
+            {result && (
+              <VerificationResult
+                result={
+                  result
+                }
+              />
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function VerificationResult({
+  result,
+}: {
+  result:
+    VerifyEvidenceResponse
+}) {
+  return (
+    <motion.div
+      initial={{
+        opacity:
+          0,
+
+        y:
+          12,
+      }}
+      animate={{
+        opacity:
+          1,
+
+        y:
+          0,
+      }}
+      className={`
+        mt-5
+        rounded-[24px]
+        border
+        p-5
+
+        ${
+          result.verified
+            ? "border-emerald-400/15 bg-emerald-400/[0.05]"
+            : "border-red-400/20 bg-red-400/[0.06]"
+        }
+      `}
+    >
+      <div
+        className="
+          flex
+          items-center
+          gap-3
+        "
+      >
+        {result.verified ? (
+          <ShieldCheck
+            size={22}
+            className="
+              text-emerald-300
+            "
+          />
+        ) : (
+          <ShieldAlert
+            size={22}
+            className="
+              text-red-300
+            "
+          />
+        )}
+
+        <div>
+          <p
+            className={`
+              text-sm
+              font-medium
+
+              ${
+                result.verified
+                  ? "text-emerald-200"
+                  : "text-red-200"
+              }
+            `}
+          >
+            {result.verified
+              ? "Integrity Verified"
+              : "Integrity Mismatch"}
+          </p>
+
+          <p
+            className="
+              mt-1
+              text-xs
+              text-white/30
+            "
+          >
+            {
+              result.message
+            }
+          </p>
+        </div>
+      </div>
+
+      <div
+        className="
+          mt-5
+          space-y-4
+        "
+      >
+        <HashResult
+          label="EXPECTED HASH"
+          hash={
+            result.expectedHash
+          }
+        />
+
+        <HashResult
+          label="CURRENT HASH"
+          hash={
+            result.currentHash
+          }
+        />
+      </div>
+
+      <div
+        className="
+          mt-5
+          flex
+          items-center
+          justify-between
+          border-t
+          border-white/[0.07]
+          pt-4
+        "
+      >
+        <span
+          className="
+            text-xs
+            text-white/25
+          "
+        >
+          Algorithm
+        </span>
+
+        <span
+          className="
+            font-mono
+            text-xs
+            text-white/50
+          "
+        >
+          {
+            result.algorithm
+          }
+        </span>
+      </div>
+    </motion.div>
+  )
+}
+
+function HashResult({
+  label,
+  hash,
+}: {
+  label: string
+  hash: string
+}) {
+  return (
+    <div>
+      <p
+        className="
+          text-[10px]
+          text-white/25
+        "
+      >
+        {label}
+      </p>
+
+      <p
+        className="
+          mt-2
+          break-all
+          font-mono
+          text-[10px]
+          leading-5
+          text-white/45
+        "
+      >
+        {hash}
+      </p>
+    </div>
   )
 }
 
@@ -4722,6 +4350,7 @@ function EvidenceDetails({
 }: {
   evidence:
     EvidenceRecord
+
   onClose:
     () => void
 }) {
@@ -4733,9 +4362,11 @@ function EvidenceDetails({
 
   async function copyHash() {
     try {
-      await navigator.clipboard.writeText(
-        evidence.hash,
-      )
+      await navigator
+        .clipboard
+        .writeText(
+          evidence.hash,
+        )
 
       setCopied(
         true,
@@ -4765,19 +4396,24 @@ function EvidenceDetails({
 
       <motion.aside
         initial={{
-          x: "100%",
+          x:
+            "100%",
         }}
         animate={{
-          x: 0,
+          x:
+            0,
         }}
         exit={{
-          x: "100%",
+          x:
+            "100%",
         }}
         transition={{
           type:
             "spring",
+
           stiffness:
             260,
+
           damping:
             30,
         }}
@@ -4789,7 +4425,7 @@ function EvidenceDetails({
           top-3
           z-[80]
           w-[calc(100%_-_24px)]
-          max-w-[620px]
+          max-w-[600px]
           overflow-y-auto
           rounded-[32px]
           p-6
@@ -4801,7 +4437,6 @@ function EvidenceDetails({
             flex
             items-start
             justify-between
-            gap-5
           "
         >
           <div
@@ -4811,7 +4446,7 @@ function EvidenceDetails({
               w-12
               items-center
               justify-center
-              rounded-[19px]
+              rounded-2xl
               border
               border-white/10
               bg-white/[0.05]
@@ -4833,35 +4468,19 @@ function EvidenceDetails({
 
         <div
           className="
-            mt-8
+            mt-7
           "
         >
-          <div
-            className="
-              flex
-              flex-wrap
-              gap-2
-            "
-          >
-            <IntegrityBadge
-              integrity={
-                evidence.integrity
-              }
-            />
-
-            <EvidenceStatusBadge
-              status={
-                evidence.status
-              }
-            />
-          </div>
+          <IntegrityBadge
+            integrity={
+              evidence.integrity
+            }
+          />
 
           <p
             className="
               mt-5
               text-xs
-              font-medium
-              tracking-[0.13em]
               text-white/25
             "
           >
@@ -4873,7 +4492,7 @@ function EvidenceDetails({
           <h2
             className="
               mt-2
-              break-words
+              break-all
               text-3xl
               font-semibold
               tracking-[-0.04em]
@@ -4903,7 +4522,6 @@ function EvidenceDetails({
         <div
           className="
             grid
-            grid-cols-1
             gap-3
             sm:grid-cols-2
           "
@@ -4913,11 +4531,6 @@ function EvidenceDetails({
             value={
               evidence.caseId
             }
-            icon={
-              <FolderKanban
-                size={15}
-              />
-            }
           />
 
           <DetailCard
@@ -4925,34 +4538,28 @@ function EvidenceDetails({
             value={
               evidence.custodian
             }
-            icon={
-              <UserRound
-                size={15}
-              />
-            }
           />
 
           <DetailCard
-            label="Evidence type"
+            label="Type"
             value={
               evidence.type
             }
-            icon={
-              <FileText
-                size={15}
-              />
+          />
+
+          <DetailCard
+            label="Size"
+            value={
+              formatBytes(
+                evidence.size,
+              )
             }
           />
 
           <DetailCard
-            label="File size"
-            value={formatBytes(
-              evidence.size,
-            )}
-            icon={
-              <HardDrive
-                size={15}
-              />
+            label="Status"
+            value={
+              evidence.status
             }
           />
 
@@ -4961,43 +4568,29 @@ function EvidenceDetails({
             value={
               evidence.createdAt
             }
-            icon={
-              <CalendarDays
-                size={15}
-              />
-            }
-          />
-
-          <DetailCard
-            label="Updated"
-            value={
-              evidence.updatedAt
-            }
-            icon={
-              <Clock3
-                size={15}
-              />
-            }
           />
         </div>
 
-        {/* HASH */}
-
         <div
           className="
-            mt-8
+            mt-7
           "
         >
-          <SectionLabel>
-            Cryptographic fingerprint
-          </SectionLabel>
+          <p
+            className="
+              text-xs
+              text-white/25
+            "
+          >
+            SHA-256
+          </p>
 
           <div
             className="
               mt-3
               rounded-[22px]
               border
-              border-white/[0.08]
+              border-white/[0.07]
               bg-black/20
               p-4
             "
@@ -5005,40 +4598,11 @@ function EvidenceDetails({
             <div
               className="
                 flex
-                items-center
-                justify-between
-                gap-3
+                justify-end
               "
             >
-              <div
-                className="
-                  flex
-                  items-center
-                  gap-2
-                "
-              >
-                <Hash
-                  size={15}
-                  className="
-                    text-white/35
-                  "
-                />
-
-                <span
-                  className="
-                    text-xs
-                    text-white/40
-                  "
-                >
-                  SHA-256
-                </span>
-              </div>
-
-              <motion.button
+              <button
                 type="button"
-                whileTap={{
-                  scale: 0.92,
-                }}
                 onClick={() =>
                   void copyHash()
                 }
@@ -5046,16 +4610,8 @@ function EvidenceDetails({
                   flex
                   items-center
                   gap-2
-                  rounded-xl
-                  border
-                  border-white/[0.08]
-                  bg-white/[0.04]
-                  px-3
-                  py-2
-                  text-[10px]
-                  text-white/40
-                  transition
-                  hover:text-white/70
+                  text-xs
+                  text-white/35
                 "
               >
                 <Copy
@@ -5065,12 +4621,12 @@ function EvidenceDetails({
                 {copied
                   ? "Copied"
                   : "Copy"}
-              </motion.button>
+              </button>
             </div>
 
             <p
               className="
-                mt-4
+                mt-3
                 break-all
                 font-mono
                 text-[11px]
@@ -5085,16 +4641,9 @@ function EvidenceDetails({
           </div>
         </div>
 
-        {/* CASE */}
-
         <div
           className="
-            mt-8
-            rounded-[22px]
-            border
-            border-white/[0.07]
-            bg-white/[0.025]
-            p-5
+            mt-7
           "
         >
           <p
@@ -5103,56 +4652,17 @@ function EvidenceDetails({
               text-white/25
             "
           >
-            ASSOCIATED CASE
+            VERSION HISTORY
           </p>
-
-          <p
-            className="
-              mt-2
-              text-sm
-              font-medium
-              text-white/65
-            "
-          >
-            {
-              evidence.caseTitle
-            }
-          </p>
-
-          <p
-            className="
-              mt-1
-              text-xs
-              text-white/25
-            "
-          >
-            {
-              evidence.caseId
-            }
-          </p>
-        </div>
-
-        {/* VERSION HISTORY */}
-
-        <div
-          className="
-            mt-8
-          "
-        >
-          <SectionLabel>
-            Version history
-          </SectionLabel>
 
           <div
             className="
-              mt-4
+              mt-3
               space-y-3
             "
           >
             {evidence.versions.map(
-              (
-                version,
-              ) => (
+              (version) => (
                 <div
                   key={
                     version.version
@@ -5168,7 +4678,6 @@ function EvidenceDetails({
                   <div
                     className="
                       flex
-                      items-center
                       justify-between
                       gap-3
                     "
@@ -5176,7 +4685,7 @@ function EvidenceDetails({
                     <p
                       className="
                         text-sm
-                        text-white/65
+                        text-white/60
                       "
                     >
                       Version{" "}
@@ -5185,16 +4694,16 @@ function EvidenceDetails({
                       }
                     </p>
 
-                    <span
+                    <p
                       className="
-                        text-[10px]
+                        text-xs
                         text-white/25
                       "
                     >
                       {
                         version.createdAt
                       }
-                    </span>
+                    </p>
                   </div>
 
                   <p
@@ -5233,177 +4742,390 @@ function EvidenceDetails({
 }
 
 /* =========================================================
-   BADGES
+   PLACEHOLDER
 ========================================================= */
 
-function PriorityBadge({
-  priority,
+function PlaceholderPage({
+  page,
 }: {
-  priority:
-    CasePriority
-}) {
-  const styles: Record<
-    CasePriority,
-    string
-  > = {
-    Low:
-      "border-blue-400/15 bg-blue-400/[0.06] text-blue-200/65",
-
-    Medium:
-      "border-amber-400/15 bg-amber-400/[0.06] text-amber-200/65",
-
-    High:
-      "border-orange-400/15 bg-orange-400/[0.06] text-orange-200/70",
-
-    Critical:
-      "border-red-400/15 bg-red-400/[0.06] text-red-200/75",
-  }
-
-  return (
-    <span
-      className={`
-        rounded-full
-        border
-        px-2.5
-        py-1
-        text-[10px]
-        ${styles[priority]}
-      `}
-    >
-      {priority}
-    </span>
-  )
-}
-
-function StatusBadge({
-  status,
-}: {
-  status:
-    CaseStatus
-}) {
-  const styles: Record<
-    CaseStatus,
-    string
-  > = {
-    Open:
-      "border-emerald-400/15 bg-emerald-400/[0.06] text-emerald-200/70",
-
-    "Under Review":
-      "border-amber-400/15 bg-amber-400/[0.06] text-amber-200/70",
-
-    Closed:
-      "border-white/10 bg-white/[0.04] text-white/35",
-  }
-
-  return (
-    <span
-      className={`
-        inline-flex
-        rounded-full
-        border
-        px-2.5
-        py-1
-        text-[10px]
-        ${styles[status]}
-      `}
-    >
-      {status}
-    </span>
-  )
-}
-
-function IntegrityBadge({
-  integrity,
-}: {
-  integrity:
-    EvidenceIntegrity
-}) {
-  const styles: Record<
-    EvidenceIntegrity,
-    string
-  > = {
-    Verified:
-      "border-emerald-400/15 bg-emerald-400/[0.06] text-emerald-200/70",
-
-    Pending:
-      "border-amber-400/15 bg-amber-400/[0.06] text-amber-200/70",
-
-    Mismatch:
-      "border-red-400/15 bg-red-400/[0.06] text-red-200/75",
-  }
-
-  return (
-    <span
-      className={`
-        inline-flex
-        items-center
-        gap-1.5
-        rounded-full
-        border
-        px-2.5
-        py-1
-        text-[10px]
-        ${styles[integrity]}
-      `}
-    >
-      {integrity ===
-      "Verified" ? (
-        <ShieldCheck
-          size={11}
-        />
-      ) : integrity ===
-        "Mismatch" ? (
-        <CircleAlert
-          size={11}
-        />
-      ) : (
-        <Clock3
-          size={11}
-        />
-      )}
-
-      {integrity}
-    </span>
-  )
-}
-
-function EvidenceStatusBadge({
-  status,
-}: {
-  status:
-    EvidenceStatus
+  page: Page
 }) {
   return (
-    <span
+    <div
       className="
-        inline-flex
-        rounded-full
-        border
-        border-white/10
-        bg-white/[0.04]
-        px-2.5
-        py-1
-        text-[10px]
-        text-white/40
+        glass
+        flex
+        min-h-[460px]
+        items-center
+        justify-center
+        rounded-[30px]
+        p-8
+        text-center
       "
     >
-      {status}
-    </span>
+      <div>
+        <Activity
+          size={30}
+          className="
+            mx-auto
+            text-white/25
+          "
+        />
+
+        <h3
+          className="
+            mt-5
+            text-xl
+            font-medium
+          "
+        >
+          {
+            pageInfo[
+              page
+            ].title
+          }
+        </h3>
+
+        <p
+          className="
+            mt-2
+            text-sm
+            text-white/30
+          "
+        >
+          We will build this
+          module in a later phase.
+        </p>
+      </div>
+    </div>
   )
 }
 
 /* =========================================================
-   SHARED COMPONENTS
+   LOGIN
 ========================================================= */
+
+function LoginScreen({
+  showPassword,
+  setShowPassword,
+  onLogin,
+}: {
+  showPassword:
+    boolean
+
+  setShowPassword:
+    (
+      value:
+        boolean,
+    ) => void
+
+  onLogin:
+    () => void
+}) {
+  return (
+    <main
+      className="
+        relative
+        min-h-screen
+        overflow-hidden
+        bg-[#050506]
+        text-white
+      "
+    >
+      <AmbientBackground />
+
+      <div
+        className="
+          relative
+          z-10
+          flex
+          min-h-screen
+          items-center
+          justify-center
+          px-5
+        "
+      >
+        <motion.div
+          initial={{
+            opacity:
+              0,
+
+            y:
+              25,
+          }}
+          animate={{
+            opacity:
+              1,
+
+            y:
+              0,
+          }}
+          className="
+            glass
+            w-full
+            max-w-[440px]
+            rounded-[34px]
+            p-8
+          "
+        >
+          <div
+            className="
+              flex
+              h-14
+              w-14
+              items-center
+              justify-center
+              rounded-[20px]
+              border
+              border-white/15
+              bg-white/10
+            "
+          >
+            <LockKeyhole
+              size={23}
+            />
+          </div>
+
+          <h1
+            className="
+              mt-7
+              text-3xl
+              font-semibold
+              tracking-[-0.04em]
+            "
+          >
+            Welcome to TRACE-X
+          </h1>
+
+          <p
+            className="
+              mt-3
+              text-sm
+              leading-6
+              text-white/35
+            "
+          >
+            Secure digital
+            evidence management
+            and integrity
+            verification.
+          </p>
+
+          <form
+            className="
+              mt-8
+              space-y-4
+            "
+            onSubmit={(
+              event,
+            ) => {
+              event.preventDefault()
+
+              onLogin()
+            }}
+          >
+            <FormField
+              label="Email"
+            >
+              <input
+                type="email"
+                className={
+                  inputClass
+                }
+                placeholder="investigator@tracex.local"
+              />
+            </FormField>
+
+            <FormField
+              label="Password"
+            >
+              <div
+                className="
+                  relative
+                "
+              >
+                <input
+                  type={
+                    showPassword
+                      ? "text"
+                      : "password"
+                  }
+                  className={`${inputClass} pr-16`}
+                  placeholder="Password"
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowPassword(
+                      !showPassword,
+                    )
+                  }
+                  className="
+                    absolute
+                    right-4
+                    top-1/2
+                    -translate-y-1/2
+                    text-xs
+                    text-white/35
+                  "
+                >
+                  {showPassword
+                    ? "Hide"
+                    : "Show"}
+                </button>
+              </div>
+            </FormField>
+
+            <button
+              type="submit"
+              className="
+                flex
+                h-12
+                w-full
+                items-center
+                justify-center
+                gap-2
+                rounded-2xl
+                bg-white
+                text-sm
+                font-semibold
+                text-black
+              "
+            >
+              Continue
+
+              <ArrowRight
+                size={17}
+              />
+            </button>
+          </form>
+        </motion.div>
+      </div>
+    </main>
+  )
+}
+
+/* =========================================================
+   SHARED UI
+========================================================= */
+
+function SearchBox({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string
+
+  onChange:
+    (
+      value:
+        string,
+    ) => void
+
+  placeholder:
+    string
+}) {
+  return (
+    <div
+      className="
+        glass
+        flex
+        h-12
+        w-full
+        items-center
+        gap-3
+        rounded-2xl
+        px-4
+        md:max-w-[420px]
+      "
+    >
+      <Search
+        size={16}
+        className="
+          shrink-0
+          text-white/30
+        "
+      />
+
+      <input
+        value={
+          value
+        }
+        onChange={(
+          event,
+        ) =>
+          onChange(
+            event
+              .target
+              .value,
+          )
+        }
+        placeholder={
+          placeholder
+        }
+        className="
+          h-full
+          w-full
+          bg-transparent
+          text-sm
+          text-white
+          placeholder:text-white/20
+        "
+      />
+    </div>
+  )
+}
+
+function PrimaryButton({
+  children,
+  onClick,
+}: {
+  children:
+    ReactNode
+
+  onClick:
+    () => void
+}) {
+  return (
+    <motion.button
+      type="button"
+      whileHover={{
+        scale:
+          1.02,
+      }}
+      whileTap={{
+        scale:
+          0.97,
+      }}
+      onClick={
+        onClick
+      }
+      className="
+        flex
+        h-12
+        items-center
+        justify-center
+        gap-2
+        rounded-2xl
+        bg-white
+        px-5
+        text-sm
+        font-semibold
+        text-black
+      "
+    >
+      {children}
+    </motion.button>
+  )
+}
 
 function MiniStat({
   label,
   value,
-  icon,
 }: {
   label: string
   value: number
-  icon: ReactNode
 }) {
   return (
     <div
@@ -5413,36 +5135,20 @@ function MiniStat({
         p-4
       "
     >
-      <div
+      <p
         className="
-          flex
-          items-center
-          justify-between
+          text-xl
+          font-semibold
         "
       >
-        <div
-          className="
-            text-white/30
-          "
-        >
-          {icon}
-        </div>
-
-        <p
-          className="
-            text-xl
-            font-semibold
-          "
-        >
-          {value}
-        </p>
-      </div>
+        {value}
+      </p>
 
       <p
         className="
-          mt-3
+          mt-2
           text-xs
-          text-white/35
+          text-white/30
         "
       >
         {label}
@@ -5476,6 +5182,46 @@ function MetaItem({
           truncate
           text-xs
           text-white/50
+        "
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function DetailCard({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className="
+        rounded-[20px]
+        border
+        border-white/[0.07]
+        bg-white/[0.025]
+        p-4
+      "
+    >
+      <p
+        className="
+          text-[10px]
+          text-white/25
+        "
+      >
+        {label.toUpperCase()}
+      </p>
+
+      <p
+        className="
+          mt-3
+          break-all
+          text-sm
+          text-white/60
         "
       >
         {value}
@@ -5528,372 +5274,101 @@ function EvidenceTypeIcon({
   )
 }
 
-function DetailCard({
-  label,
-  value,
-  icon,
+function IntegrityBadge({
+  integrity,
 }: {
-  label: string
-  value: string
-  icon: ReactNode
+  integrity:
+    EvidenceIntegrity
 }) {
+  const style =
+    integrity ===
+    "Verified"
+      ? "border-emerald-400/15 bg-emerald-400/[0.06] text-emerald-200/70"
+      : integrity ===
+        "Mismatch"
+      ? "border-red-400/15 bg-red-400/[0.06] text-red-200/75"
+      : "border-amber-400/15 bg-amber-400/[0.06] text-amber-200/70"
+
   return (
-    <div
-      className="
-        rounded-[20px]
-        border
-        border-white/[0.07]
-        bg-white/[0.025]
-        p-4
-      "
-    >
-      <div
-        className="
-          flex
-          items-center
-          gap-2
-          text-white/25
-        "
-      >
-        {icon}
-
-        <span
-          className="
-            text-[10px]
-          "
-        >
-          {label.toUpperCase()}
-        </span>
-      </div>
-
-      <p
-        className="
-          mt-3
-          break-words
-          text-sm
-          text-white/65
-        "
-      >
-        {value}
-      </p>
-    </div>
-  )
-}
-
-function ActivityItem({
-  title,
-  description,
-}: {
-  title: string
-  description: string
-}) {
-  return (
-    <div
-      className="
-        flex
-        gap-4
-      "
-    >
-      <div
-        className="
-          flex
-          flex-col
-          items-center
-        "
-      >
-        <div
-          className="
-            mt-1
-            h-2
-            w-2
-            rounded-full
-            bg-white/40
-          "
-        />
-
-        <div
-          className="
-            mt-2
-            h-full
-            w-px
-            bg-white/[0.07]
-          "
-        />
-      </div>
-
-      <div
-        className="
-          pb-3
-        "
-      >
-        <p
-          className="
-            text-sm
-            text-white/60
-          "
-        >
-          {title}
-        </p>
-
-        <p
-          className="
-            mt-1
-            text-xs
-            text-white/25
-          "
-        >
-          {description}
-        </p>
-      </div>
-    </div>
-  )
-}
-
-function ModalBackdrop({
-  onClose,
-}: {
-  onClose:
-    () => void
-}) {
-  return (
-    <motion.div
-      initial={{
-        opacity: 0,
-      }}
-      animate={{
-        opacity: 1,
-      }}
-      exit={{
-        opacity: 0,
-      }}
-      onClick={
-        onClose
-      }
-      className="
-        fixed
-        inset-0
-        z-[70]
-        bg-black/65
-        backdrop-blur-md
-      "
-    />
-  )
-}
-
-function ModalHeader({
-  title,
-  description,
-  onClose,
-}: {
-  title: string
-  description: string
-  onClose:
-    () => void
-}) {
-  return (
-    <div
-      className="
-        flex
-        items-start
-        justify-between
-        gap-5
-      "
-    >
-      <div>
-        <p
-          className="
-            text-xs
-            font-medium
-            tracking-[0.15em]
-            text-white/30
-          "
-        >
-          TRACE-X
-        </p>
-
-        <h3
-          className="
-            mt-2
-            text-2xl
-            font-semibold
-            tracking-[-0.03em]
-          "
-        >
-          {title}
-        </h3>
-
-        <p
-          className="
-            mt-2
-            max-w-lg
-            text-sm
-            leading-6
-            text-white/30
-          "
-        >
-          {description}
-        </p>
-      </div>
-
-      <CloseButton
-        onClick={
-          onClose
-        }
-      />
-    </div>
-  )
-}
-
-function CloseButton({
-  onClick,
-}: {
-  onClick:
-    () => void
-}) {
-  return (
-    <motion.button
-      type="button"
-      whileTap={{
-        scale: 0.9,
-      }}
-      onClick={
-        onClick
-      }
-      className="
-        flex
-        h-10
-        w-10
-        shrink-0
+    <span
+      className={`
+        inline-flex
         items-center
-        justify-center
+        gap-1.5
+        rounded-full
+        border
+        px-2.5
+        py-1
+        text-[10px]
+        ${style}
+      `}
+    >
+      {integrity ===
+      "Verified" ? (
+        <ShieldCheck
+          size={11}
+        />
+      ) : integrity ===
+        "Mismatch" ? (
+        <CircleAlert
+          size={11}
+        />
+      ) : (
+        <Clock3
+          size={11}
+        />
+      )}
+
+      {integrity}
+    </span>
+  )
+}
+
+function PriorityBadge({
+  priority,
+}: {
+  priority:
+    CasePriority
+}) {
+  return (
+    <span
+      className="
         rounded-full
         border
         border-white/10
-        bg-white/[0.05]
-        text-white/40
-        transition
-        hover:text-white
+        bg-white/[0.04]
+        px-2.5
+        py-1
+        text-[10px]
+        text-white/45
       "
     >
-      <X size={17} />
-    </motion.button>
+      {priority}
+    </span>
   )
 }
 
-function ModalActions({
-  onCancel,
-  onConfirm,
-  confirmText,
-  disabled = false,
+function CaseStatusBadge({
+  status,
 }: {
-  onCancel:
-    () => void
-  onConfirm:
-    () => void
-  confirmText: string
-  disabled?: boolean
+  status:
+    CaseStatus
 }) {
   return (
-    <div
+    <span
       className="
-        mt-7
-        flex
-        justify-end
-        gap-3
+        rounded-full
+        border
+        border-white/10
+        bg-white/[0.04]
+        px-2.5
+        py-1
+        text-[10px]
+        text-white/40
       "
     >
-      <button
-        type="button"
-        onClick={
-          onCancel
-        }
-        className="
-          h-11
-          rounded-2xl
-          px-5
-          text-sm
-          text-white/40
-          transition
-          hover:bg-white/[0.05]
-          hover:text-white/70
-        "
-      >
-        Cancel
-      </button>
-
-      <motion.button
-        type="button"
-        disabled={
-          disabled
-        }
-        whileHover={
-          disabled
-            ? {}
-            : {
-                scale:
-                  1.02,
-              }
-        }
-        whileTap={
-          disabled
-            ? {}
-            : {
-                scale:
-                  0.97,
-              }
-        }
-        onClick={
-          onConfirm
-        }
-        className={`
-          flex
-          h-11
-          items-center
-          gap-2
-          rounded-2xl
-          px-5
-          text-sm
-          font-semibold
-          transition
-
-          ${
-            disabled
-              ? "cursor-not-allowed bg-white/20 text-white/30"
-              : "bg-white text-black"
-          }
-        `}
-      >
-        <Plus size={16} />
-
-        {confirmText}
-      </motion.button>
-    </div>
-  )
-}
-
-function FormField({
-  label,
-  children,
-}: {
-  label: string
-  children: ReactNode
-}) {
-  return (
-    <div>
-      <label
-        className="
-          mb-2
-          block
-          px-1
-          text-xs
-          text-white/40
-        "
-      >
-        {label}
-      </label>
-
-      {children}
-    </div>
+      {status}
+    </span>
   )
 }
 
@@ -5911,11 +5386,10 @@ function EmptyState({
       className="
         glass
         flex
-        min-h-[320px]
+        min-h-[280px]
         items-center
         justify-center
         rounded-[28px]
-        p-8
         text-center
       "
     >
@@ -5953,11 +5427,397 @@ function EmptyState({
   )
 }
 
+function InfoPanel({
+  children,
+}: {
+  children:
+    ReactNode
+}) {
+  return (
+    <div
+      className="
+        flex
+        items-start
+        gap-3
+        rounded-[22px]
+        border
+        border-white/[0.07]
+        bg-white/[0.025]
+        p-4
+      "
+    >
+      {children}
+    </div>
+  )
+}
+
+function FormField({
+  label,
+  children,
+}: {
+  label: string
+  children:
+    ReactNode
+}) {
+  return (
+    <div>
+      <label
+        className="
+          mb-2
+          block
+          px-1
+          text-xs
+          text-white/40
+        "
+      >
+        {label}
+      </label>
+
+      {children}
+    </div>
+  )
+}
+
+function FormError({
+  message,
+}: {
+  message: string
+}) {
+  return (
+    <div
+      className="
+        flex
+        items-start
+        gap-3
+        rounded-[18px]
+        border
+        border-red-400/15
+        bg-red-400/[0.05]
+        p-3
+      "
+    >
+      <CircleAlert
+        size={16}
+        className="
+          mt-0.5
+          shrink-0
+          text-red-300
+        "
+      />
+
+      <p
+        className="
+          text-xs
+          leading-5
+          text-red-200/70
+        "
+      >
+        {message}
+      </p>
+    </div>
+  )
+}
+
+function ModalBackdrop({
+  onClose,
+}: {
+  onClose:
+    () => void
+}) {
+  return (
+    <motion.div
+      initial={{
+        opacity:
+          0,
+      }}
+      animate={{
+        opacity:
+          1,
+      }}
+      exit={{
+        opacity:
+          0,
+      }}
+      onClick={
+        onClose
+      }
+      className="
+        fixed
+        inset-0
+        z-[70]
+        bg-black/65
+        backdrop-blur-md
+      "
+    />
+  )
+}
+
+function ModalCard({
+  children,
+  large = false,
+}: {
+  children:
+    ReactNode
+
+  large?:
+    boolean
+}) {
+  return (
+    <motion.div
+      initial={{
+        opacity:
+          0,
+
+        scale:
+          0.95,
+
+        y:
+          20,
+      }}
+      animate={{
+        opacity:
+          1,
+
+        scale:
+          1,
+
+        y:
+          0,
+      }}
+      exit={{
+        opacity:
+          0,
+
+        scale:
+          0.96,
+      }}
+      className={`
+        glass
+        fixed
+        left-1/2
+        top-1/2
+        z-[80]
+        max-h-[calc(100vh_-_2rem)]
+        w-[calc(100%_-_2rem)]
+        -translate-x-1/2
+        -translate-y-1/2
+        overflow-y-auto
+        rounded-[32px]
+        p-6
+        md:p-8
+
+        ${
+          large
+            ? "max-w-[700px]"
+            : "max-w-[520px]"
+        }
+      `}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
+function ModalHeader({
+  title,
+  description,
+  onClose,
+}: {
+  title: string
+  description: string
+  onClose:
+    () => void
+}) {
+  return (
+    <div
+      className="
+        flex
+        items-start
+        justify-between
+        gap-4
+      "
+    >
+      <div>
+        <p
+          className="
+            text-xs
+            tracking-[0.15em]
+            text-white/25
+          "
+        >
+          TRACE-X
+        </p>
+
+        <h3
+          className="
+            mt-2
+            text-2xl
+            font-semibold
+          "
+        >
+          {title}
+        </h3>
+
+        <p
+          className="
+            mt-2
+            max-w-xl
+            text-sm
+            leading-6
+            text-white/30
+          "
+        >
+          {description}
+        </p>
+      </div>
+
+      <CloseButton
+        onClick={
+          onClose
+        }
+      />
+    </div>
+  )
+}
+
+function CloseButton({
+  onClick,
+}: {
+  onClick:
+    () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={
+        onClick
+      }
+      className="
+        flex
+        h-10
+        w-10
+        shrink-0
+        items-center
+        justify-center
+        rounded-full
+        border
+        border-white/10
+        bg-white/[0.05]
+        text-white/40
+      "
+    >
+      <X
+        size={17}
+      />
+    </button>
+  )
+}
+
+function ModalActions({
+  onCancel,
+  onConfirm,
+  disabled,
+  busy,
+  confirmText,
+  busyText,
+}: {
+  onCancel:
+    () => void
+
+  onConfirm:
+    () => void
+
+  disabled:
+    boolean
+
+  busy:
+    boolean
+
+  confirmText:
+    string
+
+  busyText:
+    string
+}) {
+  const unavailable =
+    disabled ||
+    busy
+
+  return (
+    <div
+      className="
+        mt-7
+        flex
+        justify-end
+        gap-3
+      "
+    >
+      <button
+        type="button"
+        disabled={
+          busy
+        }
+        onClick={
+          onCancel
+        }
+        className="
+          h-11
+          rounded-2xl
+          px-5
+          text-sm
+          text-white/40
+        "
+      >
+        Cancel
+      </button>
+
+      <button
+        type="button"
+        disabled={
+          unavailable
+        }
+        onClick={
+          onConfirm
+        }
+        className={`
+          flex
+          h-11
+          items-center
+          gap-2
+          rounded-2xl
+          px-5
+          text-sm
+          font-semibold
+
+          ${
+            unavailable
+              ? "cursor-not-allowed bg-white/20 text-white/30"
+              : "bg-white text-black"
+          }
+        `}
+      >
+        {busy && (
+          <LoaderCircle
+            size={16}
+            className="
+              animate-spin
+            "
+          />
+        )}
+
+        {busy
+          ? busyText
+          : confirmText}
+      </button>
+    </div>
+  )
+}
+
 function Divider() {
   return (
     <div
       className="
-        my-8
+        my-6
         h-px
         bg-gradient-to-r
         from-transparent
@@ -5968,438 +5828,8 @@ function Divider() {
   )
 }
 
-function SectionLabel({
-  children,
-}: {
-  children:
-    ReactNode
-}) {
-  return (
-    <p
-      className="
-        text-xs
-        font-medium
-        uppercase
-        tracking-[0.15em]
-        text-white/25
-      "
-    >
-      {children}
-    </p>
-  )
-}
-
 /* =========================================================
-   PLACEHOLDER PAGES
-========================================================= */
-
-function PlaceholderPage({
-  page,
-}: {
-  page: Page
-}) {
-  const icons = {
-    cases:
-      FolderKanban,
-
-    evidence:
-      FileText,
-
-    transfers:
-      ArrowLeftRight,
-
-    verify:
-      ScanSearch,
-
-    audit:
-      Activity,
-
-    dashboard:
-      LayoutDashboard,
-  }
-
-  const Icon =
-    icons[page]
-
-  return (
-    <div
-      className="
-        glass
-        flex
-        min-h-[460px]
-        items-center
-        justify-center
-        rounded-[30px]
-        p-8
-        text-center
-      "
-    >
-      <div>
-        <div
-          className="
-            mx-auto
-            flex
-            h-16
-            w-16
-            items-center
-            justify-center
-            rounded-[22px]
-            border
-            border-white/10
-            bg-white/[0.05]
-          "
-        >
-          <Icon
-            size={25}
-            className="
-              text-white/45
-            "
-          />
-        </div>
-
-        <h3
-          className="
-            mt-6
-            text-xl
-            font-medium
-            tracking-tight
-          "
-        >
-          {
-            pageInfo[
-              page
-            ].title
-          }
-        </h3>
-
-        <p
-          className="
-            mx-auto
-            mt-2
-            max-w-md
-            text-sm
-            leading-6
-            text-white/30
-          "
-        >
-          This module is
-          ready for us to
-          build next.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-/* =========================================================
-   LOGIN SCREEN
-========================================================= */
-
-function LoginScreen({
-  showPassword,
-  setShowPassword,
-  onLogin,
-}: {
-  showPassword:
-    boolean
-
-  setShowPassword:
-    (
-      value:
-        boolean,
-    ) => void
-
-  onLogin:
-    () => void
-}) {
-  return (
-    <main
-      className="
-        relative
-        min-h-screen
-        overflow-hidden
-        bg-[#050506]
-        text-white
-      "
-    >
-      <AmbientBackground />
-
-      <header
-        className="
-          absolute
-          left-0
-          right-0
-          top-0
-          z-20
-          flex
-          items-center
-          justify-between
-          px-6
-          py-6
-          md:px-10
-        "
-      >
-        <div
-          className="
-            flex
-            items-center
-            gap-3
-          "
-        >
-          <div
-            className="
-              glass
-              flex
-              h-10
-              w-10
-              items-center
-              justify-center
-              rounded-2xl
-            "
-          >
-            <Fingerprint
-              size={20}
-            />
-          </div>
-
-          <div>
-            <p
-              className="
-                text-sm
-                font-semibold
-                tracking-[0.2em]
-              "
-            >
-              TRACE-X
-            </p>
-
-            <p
-              className="
-                text-[10px]
-                text-white/35
-              "
-            >
-              Digital Evidence
-              Integrity
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="
-            hidden
-            items-center
-            gap-2
-            rounded-full
-            border
-            border-white/10
-            bg-white/5
-            px-4
-            py-2
-            text-xs
-            text-white/40
-            backdrop-blur-xl
-            md:flex
-          "
-        >
-          <ShieldCheck
-            size={14}
-          />
-
-          Secure forensic
-          environment
-        </div>
-      </header>
-
-      <div
-        className="
-          relative
-          z-10
-          flex
-          min-h-screen
-          items-center
-          justify-center
-          px-5
-          py-28
-        "
-      >
-        <motion.section
-          initial={{
-            opacity: 0,
-            scale: 0.96,
-            y: 30,
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1,
-            y: 0,
-          }}
-          transition={{
-            duration: 0.75,
-            ease: [
-              0.22,
-              1,
-              0.36,
-              1,
-            ],
-          }}
-          className="
-            glass
-            w-full
-            max-w-[440px]
-            rounded-[34px]
-            p-7
-            md:p-9
-          "
-        >
-          <div
-            className="
-              mb-8
-              flex
-              h-14
-              w-14
-              items-center
-              justify-center
-              rounded-[20px]
-              border
-              border-white/15
-              bg-white/10
-            "
-          >
-            <LockKeyhole
-              size={23}
-            />
-          </div>
-
-          <h1
-            className="
-              text-[32px]
-              font-semibold
-              tracking-[-0.04em]
-            "
-          >
-            Welcome to TRACE-X
-          </h1>
-
-          <p
-            className="
-              mt-3
-              text-sm
-              leading-6
-              text-white/40
-            "
-          >
-            Sign in to securely
-            manage digital
-            evidence, custody
-            records, and
-            blockchain
-            verification.
-          </p>
-
-          <form
-            onSubmit={(
-              event,
-            ) => {
-              event.preventDefault()
-
-              onLogin()
-            }}
-            className="
-              mt-8
-              space-y-4
-            "
-          >
-            <FormField
-              label="Email"
-            >
-              <input
-                type="email"
-                placeholder="investigator@tracex.local"
-                className={inputClass}
-              />
-            </FormField>
-
-            <FormField
-              label="Password"
-            >
-              <div
-                className="
-                  relative
-                "
-              >
-                <input
-                  type={
-                    showPassword
-                      ? "text"
-                      : "password"
-                  }
-                  placeholder="Enter your password"
-                  className={`${inputClass} pr-16`}
-                />
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowPassword(
-                      !showPassword,
-                    )
-                  }
-                  className="
-                    absolute
-                    right-4
-                    top-1/2
-                    -translate-y-1/2
-                    text-xs
-                    text-white/35
-                    transition
-                    hover:text-white/70
-                  "
-                >
-                  {showPassword
-                    ? "Hide"
-                    : "Show"}
-                </button>
-              </div>
-            </FormField>
-
-            <motion.button
-              type="submit"
-              whileHover={{
-                scale: 1.015,
-              }}
-              whileTap={{
-                scale: 0.975,
-              }}
-              className="
-                flex
-                h-12
-                w-full
-                items-center
-                justify-center
-                gap-2
-                rounded-2xl
-                bg-white
-                text-sm
-                font-semibold
-                text-black
-              "
-            >
-              Continue
-
-              <ArrowRight
-                size={17}
-              />
-            </motion.button>
-          </form>
-        </motion.section>
-      </div>
-    </main>
-  )
-}
-
-/* =========================================================
-   AMBIENT BACKGROUND
+   BACKGROUND
 ========================================================= */
 
 function AmbientBackground() {
@@ -6427,29 +5857,21 @@ function AmbientBackground() {
           x: [
             0,
             70,
-            10,
             0,
           ],
 
           y: [
             0,
             40,
-            80,
             0,
-          ],
-
-          scale: [
-            1,
-            1.12,
-            0.95,
-            1,
           ],
         }}
         transition={{
-          duration: 20,
-          repeat: Infinity,
-          ease:
-            "easeInOut",
+          duration:
+            20,
+
+          repeat:
+            Infinity,
         }}
       />
 
@@ -6468,29 +5890,21 @@ function AmbientBackground() {
           x: [
             0,
             -60,
-            -15,
             0,
           ],
 
           y: [
             0,
             -50,
-            -80,
             0,
-          ],
-
-          scale: [
-            1,
-            0.92,
-            1.1,
-            1,
           ],
         }}
         transition={{
-          duration: 24,
-          repeat: Infinity,
-          ease:
-            "easeInOut",
+          duration:
+            24,
+
+          repeat:
+            Infinity,
         }}
       />
     </div>
@@ -6498,7 +5912,103 @@ function AmbientBackground() {
 }
 
 /* =========================================================
-   SHA-256
+   API HELPER
+========================================================= */
+
+async function requestJson<T>(
+  path: string,
+  options:
+    RequestInit = {},
+): Promise<T> {
+  const headers =
+    new Headers(
+      options.headers,
+    )
+
+  /*
+   * IMPORTANT:
+   * Never manually set multipart/form-data Content-Type
+   * when using FormData. The browser must generate the
+   * boundary value automatically.
+   */
+  const isFormData =
+    options.body instanceof
+    FormData
+
+  if (
+    options.body &&
+    !isFormData &&
+    !headers.has(
+      "Content-Type",
+    )
+  ) {
+    headers.set(
+      "Content-Type",
+      "application/json",
+    )
+  }
+
+  let response:
+    Response
+
+  try {
+    response =
+      await fetch(
+        `${API_BASE_URL}${path}`,
+        {
+          ...options,
+          headers,
+        },
+      )
+  } catch {
+    throw new Error(
+      "Could not reach the TRACE-X backend. Make sure server\\npm run dev is running.",
+    )
+  }
+
+  let data:
+    unknown = null
+
+  try {
+    data =
+      await response.json()
+  } catch {
+    data =
+      null
+  }
+
+  if (
+    !response.ok
+  ) {
+    const apiError =
+      data as
+        | ApiErrorResponse
+        | null
+
+    throw new Error(
+      apiError?.message ||
+        `TRACE-X API returned HTTP ${response.status}.`,
+    )
+  }
+
+  return data as T
+}
+
+function getErrorMessage(
+  error: unknown,
+) {
+  if (
+    error instanceof
+    Error
+  ) {
+    return error.message
+  }
+
+  return "An unexpected TRACE-X error occurred."
+}
+
+/* =========================================================
+   BROWSER SHA-256 PREVIEW
 ========================================================= */
 
 async function calculateSHA256(
@@ -6513,14 +6023,11 @@ async function calculateSHA256(
       fileBuffer,
     )
 
-  const hashArray =
-    Array.from(
-      new Uint8Array(
-        digest,
-      ),
-    )
-
-  return hashArray
+  return Array.from(
+    new Uint8Array(
+      digest,
+    ),
+  )
     .map(
       (byte) =>
         byte
@@ -6534,7 +6041,7 @@ async function calculateSHA256(
 }
 
 /* =========================================================
-   FILE TYPE DETECTION
+   TYPE DETECTION
 ========================================================= */
 
 function detectEvidenceType(
@@ -6630,7 +6137,7 @@ function detectEvidenceType(
 }
 
 /* =========================================================
-   SIZE FORMATTING
+   FILE SIZE
 ========================================================= */
 
 function formatBytes(
@@ -6651,21 +6158,23 @@ function formatBytes(
   ]
 
   const index =
-    Math.floor(
-      Math.log(
-        bytes,
-      ) /
+    Math.min(
+      Math.floor(
         Math.log(
-          1024,
-        ),
+          bytes,
+        ) /
+          Math.log(
+            1024,
+          ),
+      ),
+
+      units.length -
+        1,
     )
 
   const value =
     bytes /
-    Math.pow(
-      1024,
-      index,
-    )
+    1024 ** index
 
   return `${value.toFixed(
     index === 0
@@ -6675,7 +6184,7 @@ function formatBytes(
 }
 
 /* =========================================================
-   SHARED FORM CLASSES
+   FORM STYLES
 ========================================================= */
 
 const inputClass = `

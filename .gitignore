@@ -1,24 +1,81 @@
-# Logs
-logs
+# =========================================================
+# TRACE-X
+# =========================================================
+
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Production builds
+dist/
+server/dist/
+dist-ssr/
+
+# =========================================================
+# ENVIRONMENT / SECRETS
+# =========================================================
+
+.env
+.env.*
+server/.env
+server/.env.*
+
+# Keep example environment files
+!.env.example
+!server/.env.example
+
+# =========================================================
+# EVIDENCE STORAGE
+# =========================================================
+
+# Never commit forensic evidence or uploaded evidence files.
+server/storage/
+
+# =========================================================
+# LOGS
+# =========================================================
+
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# =========================================================
+# RUNTIME FILES
+# =========================================================
 
-# Editor directories and files
+*.pid
+*.seed
+*.pid.lock
+
+# =========================================================
+# TESTING
+# =========================================================
+
+coverage/
+
+# =========================================================
+# OPERATING SYSTEM FILES
+# =========================================================
+
+.DS_Store
+Thumbs.db
+
+# =========================================================
+# EDITORS
+# =========================================================
+
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+
+.idea/
+
+# =========================================================
+# TEMPORARY FILES
+# =========================================================
+
+*.tmp
+*.temp
+*.local

@@ -238,6 +238,13 @@ export async function initializeDatabase() {
             )
           ),
 
+        storage_key TEXT,
+
+        storage_provider TEXT NOT NULL
+          DEFAULT 'metadata-only',
+
+        mime_type TEXT,
+
         created_at TIMESTAMPTZ
           NOT NULL
           DEFAULT NOW(),
@@ -246,6 +253,30 @@ export async function initializeDatabase() {
           NOT NULL
           DEFAULT NOW()
       )
+    `)
+
+    /* -----------------------------------------------------
+       MIGRATE OLDER DATABASES
+
+       These statements make this safe if your evidence table
+       was created in the previous step.
+    ----------------------------------------------------- */
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS storage_key TEXT
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS storage_provider TEXT
+      NOT NULL
+      DEFAULT 'metadata-only'
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS mime_type TEXT
     `)
 
     /* -----------------------------------------------------
@@ -302,10 +333,16 @@ export async function initializeDatabase() {
       ON evidence_versions(evidence_id)
     `)
 
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_storage_key
+      ON evidence(storage_key)
+      WHERE storage_key IS NOT NULL
+    `)
+
     /* -----------------------------------------------------
        INITIAL SEED DATA
 
-       Only inserted when BOTH Cases and Evidence are empty.
+       Only seed a completely empty database.
     ----------------------------------------------------- */
 
     const caseCountResult =
@@ -404,6 +441,9 @@ export async function initializeDatabase() {
 
       /* ---------------------------------------------------
          SEED EVIDENCE
+
+         These are metadata-only example records, so they do
+         not have storage_key values.
       --------------------------------------------------- */
 
       await client.query(`
@@ -418,6 +458,7 @@ export async function initializeDatabase() {
           custodian,
           integrity,
           status,
+          storage_provider,
           created_at,
           updated_at
         )
@@ -433,6 +474,7 @@ export async function initializeDatabase() {
           'Investigator A',
           'Verified',
           'Sealed',
+          'metadata-only',
           NOW() - INTERVAL '2 days',
           NOW() - INTERVAL '20 minutes'
         ),
@@ -447,6 +489,7 @@ export async function initializeDatabase() {
           'Investigator B',
           'Verified',
           'Registered',
+          'metadata-only',
           NOW() - INTERVAL '3 days',
           NOW() - INTERVAL '1 hour'
         ),
@@ -461,6 +504,7 @@ export async function initializeDatabase() {
           'Investigator C',
           'Pending',
           'Registered',
+          'metadata-only',
           NOW() - INTERVAL '5 days',
           NOW() - INTERVAL '2 hours'
         )
@@ -494,7 +538,7 @@ export async function initializeDatabase() {
     }
 
     /* -----------------------------------------------------
-       ALIGN SEQUENCES WITH EXISTING DATA
+       ALIGN SEQUENCES
     ----------------------------------------------------- */
 
     await client.query(`
