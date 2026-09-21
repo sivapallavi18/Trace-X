@@ -1,0 +1,31 @@
+# =========================================================
+# TRACE-X BLOCKCHAIN
+# =========================================================
+
+# Dependencies
+node_modules/
+
+# Hardhat generated files
+artifacts/
+cache/
+
+# Test coverage
+coverage/
+coverage.json
+
+# Local Hardhat blockchain deployment state
+ignition/deployments/chain-31337/
+
+# Secrets
+.env
+.env.*
+
+# Keep example environment files
+!.env.example
+
+# Logs
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
