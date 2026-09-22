@@ -55,7 +55,7 @@ const BROWSER_HASH_LIMIT =
   256 * 1024 * 1024
 
 /* =========================================================
-   API TYPES
+   GENERIC API TYPES
 ========================================================= */
 
 type ApiListResponse<T> = {
@@ -75,6 +75,10 @@ type ApiErrorResponse = {
   message?: string
   blockchainError?: string
 }
+
+/* =========================================================
+   BLOCKCHAIN TYPES
+========================================================= */
 
 type BlockchainAnchorStatus =
   | "Not Anchored"
@@ -112,111 +116,6 @@ type BlockchainVerification = {
 
   error:
     string | null
-}
-
-type VerifyEvidenceResponse = {
-  success: boolean
-  verified: boolean
-  integrity: EvidenceIntegrity
-  evidenceId: string
-  algorithm: string
-  expectedHash: string
-  currentHash: string
-  message: string
-
-  fileVerification: {
-    checked: boolean
-    verified: boolean
-    databaseHash: string
-    currentFileHash: string
-  }
-
-  blockchain:
-    BlockchainVerification
-}
-
-/* =========================================================
-   NAVIGATION
-========================================================= */
-
-const navigation = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
-  },
-  {
-    id: "cases",
-    label: "Cases",
-    icon: FolderKanban,
-  },
-  {
-    id: "evidence",
-    label: "Evidence",
-    icon: FileText,
-  },
-  {
-    id: "transfers",
-    label: "Transfers",
-    icon: ArrowLeftRight,
-  },
-  {
-    id: "verify",
-    label: "Verify",
-    icon: ScanSearch,
-  },
-  {
-    id: "audit",
-    label: "Audit Log",
-    icon: Activity,
-  },
-] as const
-
-type Page =
-  (typeof navigation)[number]["id"]
-
-const pageInfo: Record<
-  Page,
-  {
-    title: string
-    description: string
-  }
-> = {
-  dashboard: {
-    title: "Dashboard",
-    description:
-      "Overview of evidence integrity, blockchain anchoring and investigations.",
-  },
-
-  cases: {
-    title: "Cases",
-    description:
-      "Manage investigations and associated digital evidence.",
-  },
-
-  evidence: {
-    title: "Evidence",
-    description:
-      "Register, store and blockchain-anchor digital forensic evidence.",
-  },
-
-  transfers: {
-    title: "Custody Transfers",
-    description:
-      "Track and manage evidence custody transitions.",
-  },
-
-  verify: {
-    title: "Integrity Verification",
-    description:
-      "Compare stored evidence against PostgreSQL and the blockchain anchor.",
-  },
-
-  audit: {
-    title: "Audit Log",
-    description:
-      "Review evidence and system activity.",
-  },
 }
 
 /* =========================================================
@@ -330,19 +229,225 @@ type UploadEvidencePayload = {
 }
 
 /* =========================================================
-   MAIN APPLICATION
+   VERIFICATION TYPES
+========================================================= */
+
+type VerifyEvidenceResponse = {
+  success: boolean
+  verified: boolean
+  integrity: EvidenceIntegrity
+  evidenceId: string
+  algorithm: string
+  expectedHash: string
+  currentHash: string
+  message: string
+
+  fileVerification: {
+    checked: boolean
+    verified: boolean
+    databaseHash: string
+    currentFileHash: string
+  }
+
+  blockchain:
+    BlockchainVerification
+}
+
+/* =========================================================
+   CUSTODY TYPES
+========================================================= */
+
+type CustodyAction =
+  | "REGISTERED"
+  | "TRANSFERRED"
+  | "RECEIVED"
+  | "VERIFIED"
+  | "SEALED"
+  | "ARCHIVED"
+
+type CustodyEvent = {
+  id: number
+  evidenceId: string
+  sequence: number
+  actionCode: number
+  action: CustodyAction
+  fromCustodian: string | null
+  toCustodian: string | null
+  reason: string
+  eventDigest: string
+
+  blockchainStatus:
+    BlockchainAnchorStatus
+
+  blockchainSequence:
+    number | null
+
+  blockchainTransactionHash:
+    string | null
+
+  blockchainBlockNumber:
+    number | null
+
+  blockchainContractAddress:
+    string | null
+
+  blockchainEvidenceKey:
+    string | null
+
+  blockchainError:
+    string | null
+
+  occurredAt: string
+  createdAt: string
+}
+
+type CustodyHistoryResponse = {
+  success: boolean
+  evidenceId: string
+  currentCustodian: string
+  count: number
+  data: CustodyEvent[]
+}
+
+type TransferCustodyResponse = {
+  success: boolean
+  message: string
+
+  blockchainAnchored:
+    boolean
+
+  blockchainError:
+    string | null
+
+  data: {
+    custodyEvent:
+      CustodyEvent | null
+
+    evidence:
+      EvidenceRecord | null
+  }
+}
+
+/* =========================================================
+   AUDIT TYPES
+========================================================= */
+
+type AuditLog = {
+  id: number
+  eventType: string
+  evidenceId: string | null
+  caseId: string | null
+  actor: string
+
+  details:
+    Record<
+      string,
+      unknown
+    >
+
+  createdAt: string
+}
+
+/* =========================================================
+   NAVIGATION
+========================================================= */
+
+const navigation = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+  },
+  {
+    id: "cases",
+    label: "Cases",
+    icon: FolderKanban,
+  },
+  {
+    id: "evidence",
+    label: "Evidence",
+    icon: FileText,
+  },
+  {
+    id: "transfers",
+    label: "Transfers",
+    icon: ArrowLeftRight,
+  },
+  {
+    id: "verify",
+    label: "Verify",
+    icon: ScanSearch,
+  },
+  {
+    id: "audit",
+    label: "Audit Log",
+    icon: Activity,
+  },
+] as const
+
+type Page =
+  (typeof navigation)[number]["id"]
+
+const pageInfo: Record<
+  Page,
+  {
+    title: string
+    description: string
+  }
+> = {
+  dashboard: {
+    title: "Dashboard",
+    description:
+      "Overview of evidence integrity, blockchain anchoring and investigations.",
+  },
+
+  cases: {
+    title: "Cases",
+    description:
+      "Manage investigations and associated digital evidence.",
+  },
+
+  evidence: {
+    title: "Evidence",
+    description:
+      "Register, store and blockchain-anchor digital forensic evidence.",
+  },
+
+  transfers: {
+    title: "Custody Transfers",
+    description:
+      "Transfer evidence custody and inspect its blockchain-backed chain of custody.",
+  },
+
+  verify: {
+    title: "Integrity Verification",
+    description:
+      "Compare stored evidence against PostgreSQL and the blockchain anchor.",
+  },
+
+  audit: {
+    title: "Audit Log",
+    description:
+      "Review append-only TRACE-X evidence and custody activity.",
+  },
+}
+
+/* =========================================================
+   APPLICATION
 ========================================================= */
 
 function App() {
   const [
     authenticated,
     setAuthenticated,
-  ] = useState(false)
+  ] =
+    useState(false)
 
   const [
     showPassword,
     setShowPassword,
-  ] = useState(false)
+  ] =
+    useState(false)
 
   const [
     activePage,
@@ -389,7 +494,7 @@ function App() {
     >(null)
 
   /* -------------------------------------------------------
-     LOAD BACKEND DATA
+     LOAD DATA
   ------------------------------------------------------- */
 
   async function loadBackendData() {
@@ -565,7 +670,7 @@ function App() {
   }
 
   /* -------------------------------------------------------
-     RETRY BLOCKCHAIN ANCHOR
+     RETRY EVIDENCE ANCHOR
   ------------------------------------------------------- */
 
   async function retryBlockchainAnchor(
@@ -605,7 +710,7 @@ function App() {
   }
 
   /* -------------------------------------------------------
-     VERIFY
+     VERIFY EVIDENCE
   ------------------------------------------------------- */
 
   async function verifyEvidenceOnServer(
@@ -650,6 +755,79 @@ function App() {
 
       throw error
     }
+  }
+
+  /* -------------------------------------------------------
+     CUSTODY TRANSFER
+  ------------------------------------------------------- */
+
+  async function transferEvidenceCustody(
+    evidenceId:
+      string,
+
+    toCustodian:
+      string,
+
+    reason:
+      string,
+  ) {
+    const response =
+      await requestJson<
+        TransferCustodyResponse
+      >(
+        `/api/evidence/${encodeURIComponent(
+          evidenceId,
+        )}/transfer`,
+        {
+          method:
+            "POST",
+
+          body:
+            JSON.stringify({
+              toCustodian,
+              reason,
+            }),
+        },
+      )
+
+    if (
+      response.data.evidence
+    ) {
+      setEvidence(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              evidenceId
+                ? response.data.evidence!
+                : item,
+          ),
+      )
+    }
+
+    return response
+  }
+
+  /* -------------------------------------------------------
+     RETRY CUSTODY EVENT
+  ------------------------------------------------------- */
+
+  async function retryCustodyAnchor(
+    custodyEventId:
+      number,
+  ) {
+    const response =
+      await requestJson<
+        ApiItemResponse<CustodyEvent>
+      >(
+        `/api/custody/${custodyEventId}/anchor`,
+        {
+          method:
+            "POST",
+        },
+      )
+
+    return response.data
   }
 
   if (
@@ -1085,6 +1263,19 @@ function App() {
                   }
                 />
               ) : activePage ===
+                "transfers" ? (
+                <TransfersPage
+                  evidence={
+                    evidence
+                  }
+                  onTransfer={
+                    transferEvidenceCustody
+                  }
+                  onRetryCustodyAnchor={
+                    retryCustodyAnchor
+                  }
+                />
+              ) : activePage ===
                 "verify" ? (
                 <VerifyPage
                   evidence={
@@ -1097,13 +1288,10 @@ function App() {
                     retryBlockchainAnchor
                   }
                 />
-              ) : (
-                <PlaceholderPage
-                  page={
-                    activePage
-                  }
-                />
-              )}
+              ) : activePage ===
+                "audit" ? (
+                <AuditLogPage />
+              ) : null}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -1318,9 +1506,8 @@ function SidebarContent({
             text-white/25
           "
         >
-          PostgreSQL +
-          off-chain storage +
-          blockchain anchoring
+          Storage, blockchain and
+          custody tracking enabled
         </p>
       </div>
 
@@ -1453,8 +1640,7 @@ function ApiConnectionBanner({
             text-blue-200/70
           "
         >
-          Loading TRACE-X
-          data...
+          Loading TRACE-X...
         </p>
       </div>
     )
@@ -1697,7 +1883,7 @@ function Dashboard({
                 "
               >
                 Integrity and
-                blockchain state
+                blockchain status
               </p>
             </div>
 
@@ -1826,7 +2012,7 @@ function Dashboard({
               font-medium
             "
           >
-            Three-Layer Integrity
+            TRACE-X Integrity
           </h3>
 
           <p
@@ -1837,11 +2023,11 @@ function Dashboard({
               text-white/30
             "
           >
-            TRACE-X separates
-            evidence bytes,
+            Evidence bytes,
             operational metadata
-            and immutable hash
-            anchoring.
+            and cryptographic
+            anchors remain
+            separated.
           </p>
 
           <div
@@ -1861,13 +2047,13 @@ function Dashboard({
             />
 
             <StorageRow
-              label="Fingerprint"
+              label="Hash"
               value="SHA-256"
             />
 
             <StorageRow
-              label="Anchor"
-              value="Hardhat chain"
+              label="Custody"
+              value="Blockchain"
             />
           </div>
         </div>
@@ -3175,11 +3361,9 @@ function EvidencePage({
                   />
 
                   <MetaItem
-                    label="SIZE"
+                    label="CUSTODIAN"
                     value={
-                      formatBytes(
-                        item.size,
-                      )
+                      item.custodian
                     }
                   />
 
@@ -3255,7 +3439,7 @@ function EvidencePage({
             >
               <ModalHeader
                 title="Register Evidence"
-                description="Upload the real evidence file. TRACE-X will hash it on the server, store it off-chain and automatically attempt blockchain anchoring."
+                description="Upload the real evidence file. TRACE-X hashes it on the server, stores it off-chain and anchors the fingerprint on the blockchain."
                 onClose={() =>
                   setRegisterOpen(
                     false,
@@ -3495,14 +3679,12 @@ function EvidencePage({
                           text-white/25
                         "
                       >
-                        Files larger
-                        than 256 MB are
-                        not loaded fully
-                        into browser
-                        memory. The
-                        backend hashes
-                        them using a
-                        stream.
+                        This file is
+                        larger than
+                        256 MB. The
+                        backend will
+                        stream and hash
+                        it instead.
                       </p>
                     </div>
                   </InfoPanel>
@@ -3609,7 +3791,7 @@ function EvidencePage({
                   </FormField>
 
                   <FormField
-                    label="Custodian"
+                    label="Initial custodian"
                   >
                     <select
                       value={
@@ -3671,53 +3853,6 @@ function EvidencePage({
                   />
                 </FormField>
 
-                <div
-                  className="
-                    rounded-[22px]
-                    border
-                    border-blue-400/10
-                    bg-blue-400/[0.035]
-                    p-4
-                  "
-                >
-                  <div
-                    className="
-                      flex
-                      items-start
-                      gap-3
-                    "
-                  >
-                    <Blocks
-                      size={17}
-                      className="
-                        mt-0.5
-                        shrink-0
-                        text-blue-300
-                      "
-                    />
-
-                    <p
-                      className="
-                        text-xs
-                        leading-5
-                        text-white/30
-                      "
-                    >
-                      TRACE-X stores
-                      the evidence file
-                      off-chain, stores
-                      metadata in
-                      PostgreSQL and
-                      sends only an
-                      opaque evidence
-                      key plus SHA-256
-                      fingerprint to
-                      the smart
-                      contract.
-                    </p>
-                  </div>
-                </div>
-
                 {error && (
                   <FormError
                     message={
@@ -3752,6 +3887,1967 @@ function EvidencePage({
         )}
       </AnimatePresence>
     </>
+  )
+}
+
+/* =========================================================
+   TRANSFERS PAGE
+========================================================= */
+
+function TransfersPage({
+  evidence,
+  onTransfer,
+  onRetryCustodyAnchor,
+}: {
+  evidence:
+    EvidenceRecord[]
+
+  onTransfer: (
+    evidenceId:
+      string,
+
+    toCustodian:
+      string,
+
+    reason:
+      string,
+  ) => Promise<TransferCustodyResponse>
+
+  onRetryCustodyAnchor: (
+    custodyEventId:
+      number,
+  ) => Promise<CustodyEvent>
+}) {
+  const [
+    search,
+    setSearch,
+  ] =
+    useState("")
+
+  const [
+    selectedId,
+    setSelectedId,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    custodyEvents,
+    setCustodyEvents,
+  ] =
+    useState<
+      CustodyEvent[]
+    >([])
+
+  const [
+    loadingHistory,
+    setLoadingHistory,
+  ] =
+    useState(false)
+
+  const [
+    historyError,
+    setHistoryError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    destination,
+    setDestination,
+  ] =
+    useState(
+      "Forensic Analyst A",
+    )
+
+  const [
+    reason,
+    setReason,
+  ] =
+    useState("")
+
+  const [
+    transferring,
+    setTransferring,
+  ] =
+    useState(false)
+
+  const [
+    transferError,
+    setTransferError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    transferMessage,
+    setTransferMessage,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    retryingEventId,
+    setRetryingEventId,
+  ] =
+    useState<
+      number | null
+    >(null)
+
+  const selectedEvidence =
+    evidence.find(
+      (item) =>
+        item.id ===
+        selectedId,
+    ) ??
+    null
+
+  useEffect(() => {
+    if (
+      selectedId ||
+      evidence.length === 0
+    ) {
+      return
+    }
+
+    const preferred =
+      evidence.find(
+        (item) =>
+          item.blockchainStatus ===
+          "Anchored",
+      ) ??
+      evidence[0]
+
+    setSelectedId(
+      preferred.id,
+    )
+  }, [
+    evidence,
+    selectedId,
+  ])
+
+  async function loadHistory(
+    evidenceId:
+      string,
+  ) {
+    setLoadingHistory(
+      true,
+    )
+
+    setHistoryError(
+      null,
+    )
+
+    try {
+      const response =
+        await requestJson<
+          CustodyHistoryResponse
+        >(
+          `/api/evidence/${encodeURIComponent(
+            evidenceId,
+          )}/custody`,
+        )
+
+      setCustodyEvents(
+        response.data,
+      )
+    } catch (error) {
+      setHistoryError(
+        getErrorMessage(
+          error,
+        ),
+      )
+
+      setCustodyEvents(
+        [],
+      )
+    } finally {
+      setLoadingHistory(
+        false,
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !selectedId
+    ) {
+      setCustodyEvents(
+        [],
+      )
+
+      return
+    }
+
+    void loadHistory(
+      selectedId,
+    )
+  }, [
+    selectedId,
+  ])
+
+  const filtered =
+    evidence.filter(
+      (item) => {
+        const query =
+          search
+            .trim()
+            .toLowerCase()
+
+        return (
+          item.name
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          item.id
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          item.custodian
+            .toLowerCase()
+            .includes(
+              query,
+            )
+        )
+      },
+    )
+
+  async function submitTransfer() {
+    if (
+      !selectedEvidence ||
+      !destination.trim() ||
+      !reason.trim() ||
+      transferring
+    ) {
+      return
+    }
+
+    setTransferring(
+      true,
+    )
+
+    setTransferError(
+      null,
+    )
+
+    setTransferMessage(
+      null,
+    )
+
+    try {
+      const response =
+        await onTransfer(
+          selectedEvidence.id,
+          destination.trim(),
+          reason.trim(),
+        )
+
+      setTransferMessage(
+        response.message,
+      )
+
+      setReason(
+        "",
+      )
+
+      await loadHistory(
+        selectedEvidence.id,
+      )
+    } catch (error) {
+      setTransferError(
+        getErrorMessage(
+          error,
+        ),
+      )
+    } finally {
+      setTransferring(
+        false,
+      )
+    }
+  }
+
+  async function retryCustodyEvent(
+    eventId:
+      number,
+  ) {
+    setRetryingEventId(
+      eventId,
+    )
+
+    setHistoryError(
+      null,
+    )
+
+    try {
+      await onRetryCustodyAnchor(
+        eventId,
+      )
+
+      if (
+        selectedId
+      ) {
+        await loadHistory(
+          selectedId,
+        )
+      }
+    } catch (error) {
+      setHistoryError(
+        getErrorMessage(
+          error,
+        ),
+      )
+    } finally {
+      setRetryingEventId(
+        null,
+      )
+    }
+  }
+
+  return (
+    <div
+      className="
+        grid
+        grid-cols-1
+        gap-4
+        xl:grid-cols-[0.85fr_1.15fr]
+      "
+    >
+      <div
+        className="
+          glass
+          rounded-[28px]
+          p-5
+          md:p-6
+        "
+      >
+        <div
+          className="
+            flex
+            items-center
+            gap-3
+          "
+        >
+          <ArrowLeftRight
+            size={20}
+            className="
+              text-blue-300
+            "
+          />
+
+          <div>
+            <h3
+              className="
+                text-base
+                font-medium
+              "
+            >
+              Evidence Custody
+            </h3>
+
+            <p
+              className="
+                mt-1
+                text-xs
+                text-white/25
+              "
+            >
+              Select evidence to
+              manage custody.
+            </p>
+          </div>
+        </div>
+
+        <div
+          className="
+            mt-5
+          "
+        >
+          <SearchBox
+            value={
+              search
+            }
+            onChange={
+              setSearch
+            }
+            placeholder="Search evidence or custodian..."
+          />
+        </div>
+
+        <div
+          className="
+            mt-5
+            max-h-[650px]
+            space-y-3
+            overflow-y-auto
+            pr-1
+          "
+        >
+          {filtered.map(
+            (item) => {
+              const selected =
+                selectedId ===
+                item.id
+
+              return (
+                <motion.button
+                  type="button"
+                  key={
+                    item.id
+                  }
+                  whileTap={{
+                    scale:
+                      0.99,
+                  }}
+                  onClick={() => {
+                    setSelectedId(
+                      item.id,
+                    )
+
+                    setTransferError(
+                      null,
+                    )
+
+                    setTransferMessage(
+                      null,
+                    )
+                  }}
+                  className={`
+                    w-full
+                    rounded-[20px]
+                    border
+                    p-4
+                    text-left
+                    transition
+
+                    ${
+                      selected
+                        ? "border-blue-300/25 bg-blue-400/[0.07]"
+                        : "border-white/[0.07] bg-white/[0.025] hover:bg-white/[0.05]"
+                    }
+                  `}
+                >
+                  <div
+                    className="
+                      flex
+                      items-start
+                      justify-between
+                      gap-3
+                    "
+                  >
+                    <div
+                      className="
+                        min-w-0
+                      "
+                    >
+                      <p
+                        className="
+                          truncate
+                          text-sm
+                          text-white/70
+                        "
+                      >
+                        {
+                          item.name
+                        }
+                      </p>
+
+                      <p
+                        className="
+                          mt-1
+                          text-xs
+                          text-white/25
+                        "
+                      >
+                        {
+                          item.id
+                        }
+                      </p>
+
+                      <p
+                        className="
+                          mt-3
+                          text-xs
+                          text-white/40
+                        "
+                      >
+                        Custodian:{" "}
+                        <span
+                          className="
+                            text-white/65
+                          "
+                        >
+                          {
+                            item.custodian
+                          }
+                        </span>
+                      </p>
+                    </div>
+
+                    <BlockchainBadge
+                      status={
+                        item.blockchainStatus
+                      }
+                    />
+                  </div>
+                </motion.button>
+              )
+            },
+          )}
+
+          {filtered.length ===
+            0 && (
+            <div
+              className="
+                py-12
+                text-center
+                text-sm
+                text-white/25
+              "
+            >
+              No evidence found.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div
+        className="
+          space-y-4
+        "
+      >
+        {!selectedEvidence ? (
+          <EmptyState
+            title="Select evidence"
+            description="Choose an evidence record to inspect its custody history."
+            icon={
+              <ArrowLeftRight
+                size={28}
+              />
+            }
+          />
+        ) : (
+          <>
+            <div
+              className="
+                glass
+                rounded-[28px]
+                p-5
+                md:p-6
+              "
+            >
+              <div
+                className="
+                  flex
+                  flex-col
+                  gap-4
+                  sm:flex-row
+                  sm:items-start
+                  sm:justify-between
+                "
+              >
+                <div>
+                  <p
+                    className="
+                      text-xs
+                      text-white/25
+                    "
+                  >
+                    {
+                      selectedEvidence.id
+                    }
+                  </p>
+
+                  <h3
+                    className="
+                      mt-2
+                      text-xl
+                      font-medium
+                    "
+                  >
+                    {
+                      selectedEvidence.name
+                    }
+                  </h3>
+
+                  <p
+                    className="
+                      mt-2
+                      text-sm
+                      text-white/30
+                    "
+                  >
+                    Current custodian:{" "}
+                    <span
+                      className="
+                        text-white/65
+                      "
+                    >
+                      {
+                        selectedEvidence.custodian
+                      }
+                    </span>
+                  </p>
+                </div>
+
+                <BlockchainBadge
+                  status={
+                    selectedEvidence.blockchainStatus
+                  }
+                />
+              </div>
+
+              <Divider />
+
+              <h4
+                className="
+                  text-sm
+                  font-medium
+                "
+              >
+                Transfer Custody
+              </h4>
+
+              <p
+                className="
+                  mt-2
+                  text-xs
+                  leading-5
+                  text-white/25
+                "
+              >
+                A custody transfer
+                changes the current
+                custodian in
+                PostgreSQL and creates
+                a SHA-256 custody
+                event digest that is
+                anchored on-chain.
+              </p>
+
+              <div
+                className="
+                  mt-5
+                  grid
+                  gap-4
+                  md:grid-cols-2
+                "
+              >
+                <FormField
+                  label="Current custodian"
+                >
+                  <input
+                    value={
+                      selectedEvidence.custodian
+                    }
+                    readOnly
+                    className={`${inputClass} opacity-60`}
+                  />
+                </FormField>
+
+                <FormField
+                  label="Transfer to"
+                >
+                  <select
+                    value={
+                      destination
+                    }
+                    onChange={(
+                      event,
+                    ) =>
+                      setDestination(
+                        event
+                          .target
+                          .value,
+                      )
+                    }
+                    className={
+                      selectClass
+                    }
+                  >
+                    <option>
+                      Investigator A
+                    </option>
+
+                    <option>
+                      Investigator B
+                    </option>
+
+                    <option>
+                      Investigator C
+                    </option>
+
+                    <option>
+                      Forensic Analyst A
+                    </option>
+
+                    <option>
+                      Forensic Analyst B
+                    </option>
+
+                    <option>
+                      Supervisor A
+                    </option>
+
+                    <option>
+                      Evidence Reviewer A
+                    </option>
+                  </select>
+                </FormField>
+              </div>
+
+              <div
+                className="
+                  mt-4
+                "
+              >
+                <FormField
+                  label="Transfer reason"
+                >
+                  <textarea
+                    rows={4}
+                    value={
+                      reason
+                    }
+                    onChange={(
+                      event,
+                    ) =>
+                      setReason(
+                        event
+                          .target
+                          .value,
+                      )
+                    }
+                    className={
+                      textareaClass
+                    }
+                    placeholder="Example: Transferred to forensic laboratory for detailed analysis"
+                  />
+                </FormField>
+              </div>
+
+              {selectedEvidence.blockchainStatus !==
+                "Anchored" && (
+                <div
+                  className="
+                    mt-4
+                  "
+                >
+                  <FormError
+                    message="This evidence must have a healthy blockchain anchor before custody can be transferred."
+                  />
+                </div>
+              )}
+
+              {transferError && (
+                <div
+                  className="
+                    mt-4
+                  "
+                >
+                  <FormError
+                    message={
+                      transferError
+                    }
+                  />
+                </div>
+              )}
+
+              {transferMessage && (
+                <div
+                  className="
+                    mt-4
+                    flex
+                    items-start
+                    gap-3
+                    rounded-[18px]
+                    border
+                    border-emerald-400/15
+                    bg-emerald-400/[0.05]
+                    p-3
+                  "
+                >
+                  <CheckCircle2
+                    size={16}
+                    className="
+                      mt-0.5
+                      shrink-0
+                      text-emerald-300
+                    "
+                  />
+
+                  <p
+                    className="
+                      text-xs
+                      leading-5
+                      text-emerald-200/70
+                    "
+                  >
+                    {
+                      transferMessage
+                    }
+                  </p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={
+                  transferring ||
+                  !reason.trim() ||
+                  !destination.trim() ||
+                  selectedEvidence.blockchainStatus !==
+                    "Anchored" ||
+                  destination
+                    .trim()
+                    .toLowerCase() ===
+                    selectedEvidence.custodian
+                      .trim()
+                      .toLowerCase()
+                }
+                onClick={() =>
+                  void submitTransfer()
+                }
+                className="
+                  mt-5
+                  flex
+                  h-12
+                  w-full
+                  items-center
+                  justify-center
+                  gap-2
+                  rounded-2xl
+                  bg-white
+                  text-sm
+                  font-semibold
+                  text-black
+                  disabled:cursor-not-allowed
+                  disabled:opacity-35
+                "
+              >
+                {transferring ? (
+                  <LoaderCircle
+                    size={17}
+                    className="
+                      animate-spin
+                    "
+                  />
+                ) : (
+                  <ArrowLeftRight
+                    size={17}
+                  />
+                )}
+
+                {transferring
+                  ? "Recording Transfer..."
+                  : "Transfer Custody"}
+              </button>
+            </div>
+
+            <div
+              className="
+                glass
+                rounded-[28px]
+                p-5
+                md:p-6
+              "
+            >
+              <div
+                className="
+                  flex
+                  items-center
+                  justify-between
+                  gap-3
+                "
+              >
+                <div>
+                  <h3
+                    className="
+                      text-base
+                      font-medium
+                    "
+                  >
+                    Chain of Custody
+                  </h3>
+
+                  <p
+                    className="
+                      mt-1
+                      text-xs
+                      text-white/25
+                    "
+                  >
+                    Ordered custody
+                    events for this
+                    evidence.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={
+                    loadingHistory
+                  }
+                  onClick={() =>
+                    selectedId &&
+                    void loadHistory(
+                      selectedId,
+                    )
+                  }
+                  className="
+                    flex
+                    h-9
+                    items-center
+                    gap-2
+                    rounded-xl
+                    border
+                    border-white/10
+                    bg-white/[0.04]
+                    px-3
+                    text-xs
+                    text-white/40
+                    disabled:opacity-40
+                  "
+                >
+                  <RefreshCw
+                    size={13}
+                    className={
+                      loadingHistory
+                        ? "animate-spin"
+                        : ""
+                    }
+                  />
+
+                  Refresh
+                </button>
+              </div>
+
+              {historyError && (
+                <div
+                  className="
+                    mt-5
+                  "
+                >
+                  <FormError
+                    message={
+                      historyError
+                    }
+                  />
+                </div>
+              )}
+
+              {loadingHistory ? (
+                <div
+                  className="
+                    flex
+                    min-h-[220px]
+                    items-center
+                    justify-center
+                  "
+                >
+                  <LoaderCircle
+                    size={24}
+                    className="
+                      animate-spin
+                      text-white/30
+                    "
+                  />
+                </div>
+              ) : custodyEvents.length ===
+                0 ? (
+                <div
+                  className="
+                    mt-5
+                    rounded-[22px]
+                    border
+                    border-white/[0.06]
+                    bg-white/[0.02]
+                    p-6
+                    text-center
+                  "
+                >
+                  <Clock3
+                    size={25}
+                    className="
+                      mx-auto
+                      text-white/20
+                    "
+                  />
+
+                  <p
+                    className="
+                      mt-4
+                      text-sm
+                      text-white/45
+                    "
+                  >
+                    No custody events
+                    yet
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className="
+                    mt-6
+                    space-y-4
+                  "
+                >
+                  {custodyEvents.map(
+                    (
+                      event,
+                      index,
+                    ) => (
+                      <CustodyTimelineItem
+                        key={
+                          event.id
+                        }
+                        event={
+                          event
+                        }
+                        isLast={
+                          index ===
+                          custodyEvents.length -
+                            1
+                        }
+                        retrying={
+                          retryingEventId ===
+                          event.id
+                        }
+                        onRetry={() =>
+                          void retryCustodyEvent(
+                            event.id,
+                          )
+                        }
+                      />
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CustodyTimelineItem({
+  event,
+  isLast,
+  retrying,
+  onRetry,
+}: {
+  event:
+    CustodyEvent
+
+  isLast:
+    boolean
+
+  retrying:
+    boolean
+
+  onRetry:
+    () => void
+}) {
+  return (
+    <div
+      className="
+        relative
+        pl-10
+      "
+    >
+      {!isLast && (
+        <div
+          className="
+            absolute
+            left-[14px]
+            top-8
+            h-[calc(100%_+_16px)]
+            w-px
+            bg-white/10
+          "
+        />
+      )}
+
+      <div
+        className="
+          absolute
+          left-0
+          top-1
+          flex
+          h-7
+          w-7
+          items-center
+          justify-center
+          rounded-full
+          border
+          border-white/10
+          bg-[#151518]
+        "
+      >
+        {event.blockchainStatus ===
+        "Anchored" ? (
+          <CheckCircle2
+            size={13}
+            className="
+              text-emerald-300
+            "
+          />
+        ) : event.blockchainStatus ===
+          "Failed" ? (
+          <CircleAlert
+            size={13}
+            className="
+              text-red-300
+            "
+          />
+        ) : (
+          <Clock3
+            size={13}
+            className="
+              text-amber-300
+            "
+          />
+        )}
+      </div>
+
+      <div
+        className="
+          rounded-[22px]
+          border
+          border-white/[0.07]
+          bg-white/[0.025]
+          p-4
+        "
+      >
+        <div
+          className="
+            flex
+            flex-col
+            gap-3
+            sm:flex-row
+            sm:items-start
+            sm:justify-between
+          "
+        >
+          <div>
+            <div
+              className="
+                flex
+                flex-wrap
+                items-center
+                gap-2
+              "
+            >
+              <span
+                className="
+                  rounded-full
+                  border
+                  border-white/10
+                  bg-white/[0.04]
+                  px-2.5
+                  py-1
+                  text-[10px]
+                  text-white/50
+                "
+              >
+                #{event.sequence}
+              </span>
+
+              <span
+                className="
+                  text-sm
+                  font-medium
+                  text-white/70
+                "
+              >
+                {formatAction(
+                  event.action,
+                )}
+              </span>
+            </div>
+
+            <p
+              className="
+                mt-2
+                text-xs
+                text-white/25
+              "
+            >
+              {formatDateTime(
+                event.occurredAt,
+              )}
+            </p>
+          </div>
+
+          <BlockchainBadge
+            status={
+              event.blockchainStatus
+            }
+          />
+        </div>
+
+        {(event.fromCustodian ||
+          event.toCustodian) && (
+          <div
+            className="
+              mt-4
+              flex
+              flex-wrap
+              items-center
+              gap-2
+              text-xs
+            "
+          >
+            <span
+              className="
+                text-white/35
+              "
+            >
+              {event.fromCustodian ||
+                "TRACE-X"}
+            </span>
+
+            <ArrowRight
+              size={13}
+              className="
+                text-white/20
+              "
+            />
+
+            <span
+              className="
+                text-white/65
+              "
+            >
+              {event.toCustodian ||
+                "—"}
+            </span>
+          </div>
+        )}
+
+        <p
+          className="
+            mt-4
+            text-sm
+            leading-6
+            text-white/35
+          "
+        >
+          {
+            event.reason
+          }
+        </p>
+
+        <div
+          className="
+            mt-4
+            rounded-[16px]
+            border
+            border-white/[0.05]
+            bg-black/15
+            p-3
+          "
+        >
+          <p
+            className="
+              text-[9px]
+              text-white/20
+            "
+          >
+            EVENT DIGEST
+          </p>
+
+          <p
+            className="
+              mt-2
+              break-all
+              font-mono
+              text-[9px]
+              leading-4
+              text-white/35
+            "
+          >
+            {
+              event.eventDigest
+            }
+          </p>
+        </div>
+
+        {event.blockchainBlockNumber !==
+          null && (
+          <p
+            className="
+              mt-3
+              text-[10px]
+              text-white/25
+            "
+          >
+            Blockchain sequence{" "}
+            {event.blockchainSequence ??
+              "—"}
+            {" • "}
+            Block{" "}
+            {
+              event.blockchainBlockNumber
+            }
+          </p>
+        )}
+
+        {event.blockchainError && (
+          <div
+            className="
+              mt-4
+            "
+          >
+            <FormError
+              message={
+                event.blockchainError
+              }
+            />
+          </div>
+        )}
+
+        {event.blockchainStatus ===
+          "Failed" && (
+          <button
+            type="button"
+            disabled={
+              retrying
+            }
+            onClick={
+              onRetry
+            }
+            className="
+              mt-4
+              flex
+              h-10
+              items-center
+              justify-center
+              gap-2
+              rounded-xl
+              bg-white
+              px-4
+              text-xs
+              font-semibold
+              text-black
+              disabled:opacity-40
+            "
+          >
+            {retrying ? (
+              <LoaderCircle
+                size={14}
+                className="
+                  animate-spin
+                "
+              />
+            ) : (
+              <RefreshCw
+                size={14}
+              />
+            )}
+
+            Retry Event Anchor
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   AUDIT LOG PAGE
+========================================================= */
+
+function AuditLogPage() {
+  const [
+    logs,
+    setLogs,
+  ] =
+    useState<
+      AuditLog[]
+    >([])
+
+  const [
+    search,
+    setSearch,
+  ] =
+    useState("")
+
+  const [
+    loading,
+    setLoading,
+  ] =
+    useState(false)
+
+  const [
+    error,
+    setError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  async function loadAudit() {
+    setLoading(
+      true,
+    )
+
+    setError(
+      null,
+    )
+
+    try {
+      const response =
+        await requestJson<
+          ApiListResponse<AuditLog>
+        >(
+          "/api/audit?limit=200",
+        )
+
+      setLogs(
+        response.data,
+      )
+    } catch (loadError) {
+      setError(
+        getErrorMessage(
+          loadError,
+        ),
+      )
+    } finally {
+      setLoading(
+        false,
+      )
+    }
+  }
+
+  useEffect(() => {
+    void loadAudit()
+  }, [])
+
+  const filtered =
+    logs.filter(
+      (log) => {
+        const query =
+          search
+            .trim()
+            .toLowerCase()
+
+        if (!query) {
+          return true
+        }
+
+        return (
+          log.eventType
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          log.actor
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          (
+            log.evidenceId ??
+            ""
+          )
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          (
+            log.caseId ??
+            ""
+          )
+            .toLowerCase()
+            .includes(
+              query,
+            )
+        )
+      },
+    )
+
+  return (
+    <>
+      <div
+        className="
+          mb-5
+          flex
+          flex-col
+          gap-3
+          md:flex-row
+          md:items-center
+          md:justify-between
+        "
+      >
+        <SearchBox
+          value={
+            search
+          }
+          onChange={
+            setSearch
+          }
+          placeholder="Search event, actor, evidence or case..."
+        />
+
+        <button
+          type="button"
+          disabled={
+            loading
+          }
+          onClick={() =>
+            void loadAudit()
+          }
+          className="
+            flex
+            h-12
+            items-center
+            justify-center
+            gap-2
+            rounded-2xl
+            border
+            border-white/10
+            bg-white/[0.05]
+            px-5
+            text-sm
+            text-white/55
+            disabled:opacity-40
+          "
+        >
+          <RefreshCw
+            size={15}
+            className={
+              loading
+                ? "animate-spin"
+                : ""
+            }
+          />
+
+          Refresh
+        </button>
+      </div>
+
+      <div
+        className="
+          mb-5
+          grid
+          grid-cols-2
+          gap-3
+          lg:grid-cols-4
+        "
+      >
+        <MiniStat
+          label="Visible Events"
+          value={
+            filtered.length
+          }
+        />
+
+        <MiniStat
+          label="Transfers"
+          value={
+            logs.filter(
+              (log) =>
+                log.eventType ===
+                "CUSTODY_TRANSFER_RECORDED",
+            ).length
+          }
+        />
+
+        <MiniStat
+          label="Anchored Events"
+          value={
+            logs.filter(
+              (log) =>
+                log.eventType ===
+                "CUSTODY_EVENT_ANCHORED",
+            ).length
+          }
+        />
+
+        <MiniStat
+          label="Anchor Failures"
+          value={
+            logs.filter(
+              (log) =>
+                log.eventType ===
+                "CUSTODY_EVENT_ANCHOR_FAILED",
+            ).length
+          }
+        />
+      </div>
+
+      {error && (
+        <div
+          className="
+            mb-5
+          "
+        >
+          <FormError
+            message={
+              error
+            }
+          />
+        </div>
+      )}
+
+      <div
+        className="
+          glass
+          overflow-hidden
+          rounded-[28px]
+        "
+      >
+        <div
+          className="
+            border-b
+            border-white/[0.07]
+            p-5
+          "
+        >
+          <div
+            className="
+              flex
+              items-center
+              gap-3
+            "
+          >
+            <Activity
+              size={18}
+              className="
+                text-blue-300
+              "
+            />
+
+            <div>
+              <h3
+                className="
+                  text-sm
+                  font-medium
+                "
+              >
+                Append-only Activity
+              </h3>
+
+              <p
+                className="
+                  mt-1
+                  text-xs
+                  text-white/25
+                "
+              >
+                PostgreSQL audit
+                records generated by
+                TRACE-X custody
+                operations.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {loading &&
+        logs.length === 0 ? (
+          <div
+            className="
+              flex
+              min-h-[300px]
+              items-center
+              justify-center
+            "
+          >
+            <LoaderCircle
+              size={25}
+              className="
+                animate-spin
+                text-white/30
+              "
+            />
+          </div>
+        ) : filtered.length ===
+          0 ? (
+          <div
+            className="
+              flex
+              min-h-[300px]
+              items-center
+              justify-center
+              text-center
+            "
+          >
+            <div>
+              <Activity
+                size={28}
+                className="
+                  mx-auto
+                  text-white/20
+                "
+              />
+
+              <p
+                className="
+                  mt-4
+                  text-sm
+                  text-white/40
+                "
+              >
+                No audit records
+                found.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div>
+            {filtered.map(
+              (log) => (
+                <AuditLogRow
+                  key={
+                    log.id
+                  }
+                  log={
+                    log
+                  }
+                />
+              ),
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function AuditLogRow({
+  log,
+}: {
+  log:
+    AuditLog
+}) {
+  const [
+    expanded,
+    setExpanded,
+  ] =
+    useState(false)
+
+  return (
+    <div
+      className="
+        border-b
+        border-white/[0.05]
+        p-5
+        last:border-0
+      "
+    >
+      <button
+        type="button"
+        onClick={() =>
+          setExpanded(
+            !expanded,
+          )
+        }
+        className="
+          w-full
+          text-left
+        "
+      >
+        <div
+          className="
+            flex
+            flex-col
+            gap-4
+            md:flex-row
+            md:items-center
+            md:justify-between
+          "
+        >
+          <div
+            className="
+              flex
+              min-w-0
+              gap-4
+            "
+          >
+            <div
+              className="
+                flex
+                h-10
+                w-10
+                shrink-0
+                items-center
+                justify-center
+                rounded-2xl
+                border
+                border-white/10
+                bg-white/[0.04]
+              "
+            >
+              <Activity
+                size={16}
+                className="
+                  text-white/40
+                "
+              />
+            </div>
+
+            <div
+              className="
+                min-w-0
+              "
+            >
+              <p
+                className="
+                  text-sm
+                  font-medium
+                  text-white/70
+                "
+              >
+                {formatAuditEvent(
+                  log.eventType,
+                )}
+              </p>
+
+              <p
+                className="
+                  mt-1
+                  text-xs
+                  text-white/25
+                "
+              >
+                Actor:{" "}
+                {
+                  log.actor
+                }
+              </p>
+            </div>
+          </div>
+
+          <div
+            className="
+              flex
+              flex-wrap
+              items-center
+              gap-4
+            "
+          >
+            {log.evidenceId && (
+              <MetaItem
+                label="EVIDENCE"
+                value={
+                  log.evidenceId
+                }
+              />
+            )}
+
+            {log.caseId && (
+              <MetaItem
+                label="CASE"
+                value={
+                  log.caseId
+                }
+              />
+            )}
+
+            <MetaItem
+              label="TIME"
+              value={
+                formatDateTime(
+                  log.createdAt,
+                )
+              }
+            />
+
+            <ChevronRight
+              size={16}
+              className={`
+                text-white/20
+                transition
+
+                ${
+                  expanded
+                    ? "rotate-90"
+                    : ""
+                }
+              `}
+            />
+          </div>
+        </div>
+      </button>
+
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{
+              opacity:
+                0,
+
+              height:
+                0,
+            }}
+            animate={{
+              opacity:
+                1,
+
+              height:
+                "auto",
+            }}
+            exit={{
+              opacity:
+                0,
+
+              height:
+                0,
+            }}
+            className="
+              overflow-hidden
+            "
+          >
+            <div
+              className="
+                mt-4
+                rounded-[20px]
+                border
+                border-white/[0.06]
+                bg-black/15
+                p-4
+              "
+            >
+              <p
+                className="
+                  text-[10px]
+                  text-white/20
+                "
+              >
+                EVENT DETAILS
+              </p>
+
+              <pre
+                className="
+                  mt-3
+                  overflow-x-auto
+                  whitespace-pre-wrap
+                  break-all
+                  font-mono
+                  text-[10px]
+                  leading-5
+                  text-white/40
+                "
+              >
+                {JSON.stringify(
+                  log.details,
+                  null,
+                  2,
+                )}
+              </pre>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   )
 }
 
@@ -4412,93 +6508,6 @@ function EvidenceDetails({
   )
 }
 
-function BlockchainField({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
-  return (
-    <div
-      className="
-        rounded-[18px]
-        border
-        border-white/[0.06]
-        bg-black/15
-        p-3
-      "
-    >
-      <p
-        className="
-          text-[10px]
-          text-white/20
-        "
-      >
-        {label}
-      </p>
-
-      <p
-        className="
-          mt-2
-          text-sm
-          text-white/55
-        "
-      >
-        {value}
-      </p>
-    </div>
-  )
-}
-
-function LongValue({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
-  return (
-    <div
-      className="
-        mt-4
-      "
-    >
-      <p
-        className="
-          text-[10px]
-          text-white/20
-        "
-      >
-        {label}
-      </p>
-
-      <div
-        className="
-          mt-2
-          rounded-[18px]
-          border
-          border-white/[0.06]
-          bg-black/20
-          p-3
-        "
-      >
-        <p
-          className="
-            break-all
-            font-mono
-            text-[10px]
-            leading-5
-            text-white/40
-          "
-        >
-          {value}
-        </p>
-      </div>
-    </div>
-  )
-}
-
 /* =========================================================
    VERIFY PAGE
 ========================================================= */
@@ -4727,8 +6736,7 @@ function VerifyPage({
               "
             >
               Run file and
-              blockchain integrity
-              checks.
+              blockchain checks.
             </p>
           </div>
         </div>
@@ -4802,59 +6810,53 @@ function VerifyPage({
                     }
                   `}
                 >
-                  <div
+                  <p
                     className="
-                      min-w-0
+                      truncate
+                      text-sm
+                      text-white/70
                     "
                   >
-                    <p
-                      className="
-                        truncate
-                        text-sm
-                        text-white/70
-                      "
-                    >
-                      {
-                        item.name
+                    {
+                      item.name
+                    }
+                  </p>
+
+                  <p
+                    className="
+                      mt-1
+                      text-xs
+                      text-white/25
+                    "
+                  >
+                    {
+                      item.id
+                    }{" "}
+                    •{" "}
+                    {
+                      item.caseId
+                    }
+                  </p>
+
+                  <div
+                    className="
+                      mt-3
+                      flex
+                      flex-wrap
+                      gap-2
+                    "
+                  >
+                    <IntegrityBadge
+                      integrity={
+                        item.integrity
                       }
-                    </p>
+                    />
 
-                    <p
-                      className="
-                        mt-1
-                        text-xs
-                        text-white/25
-                      "
-                    >
-                      {
-                        item.id
-                      }{" "}
-                      •{" "}
-                      {
-                        item.caseId
+                    <BlockchainBadge
+                      status={
+                        item.blockchainStatus
                       }
-                    </p>
-
-                    <div
-                      className="
-                        mt-3
-                        flex
-                        flex-wrap
-                        gap-2
-                      "
-                    >
-                      <IntegrityBadge
-                        integrity={
-                          item.integrity
-                        }
-                      />
-
-                      <BlockchainBadge
-                        status={
-                          item.blockchainStatus
-                        }
-                      />
-                    </div>
+                    />
                   </div>
                 </motion.button>
               )
@@ -4899,25 +6901,6 @@ function VerifyPage({
               >
                 Select evidence
               </h3>
-
-              <p
-                className="
-                  mx-auto
-                  mt-2
-                  max-w-sm
-                  text-sm
-                  leading-6
-                  text-white/25
-                "
-              >
-                TRACE-X will compare
-                the stored file with
-                PostgreSQL and then
-                compare its
-                cryptographic
-                fingerprint with the
-                blockchain anchor.
-              </p>
             </div>
           </div>
         ) : (
@@ -4993,39 +6976,12 @@ function VerifyPage({
 
             <Divider />
 
-            <p
-              className="
-                text-xs
-                text-white/25
-              "
-            >
-              POSTGRESQL SHA-256
-            </p>
-
-            <div
-              className="
-                mt-3
-                rounded-[20px]
-                border
-                border-white/[0.07]
-                bg-black/20
-                p-4
-              "
-            >
-              <p
-                className="
-                  break-all
-                  font-mono
-                  text-[11px]
-                  leading-5
-                  text-white/45
-                "
-              >
-                {
-                  selectedEvidence.hash
-                }
-              </p>
-            </div>
+            <LongValue
+              label="POSTGRESQL SHA-256"
+              value={
+                selectedEvidence.hash
+              }
+            />
 
             {selectedEvidence.blockchainStatus ===
               "Failed" && (
@@ -5076,14 +7032,6 @@ function VerifyPage({
               disabled={
                 verifying
               }
-              whileHover={
-                verifying
-                  ? {}
-                  : {
-                      scale:
-                        1.01,
-                    }
-              }
               whileTap={
                 verifying
                   ? {}
@@ -5120,8 +7068,7 @@ function VerifyPage({
                     "
                   />
 
-                  Running integrity
-                  checks...
+                  Running checks...
                 </>
               ) : (
                 <>
@@ -5163,7 +7110,7 @@ function VerifyPage({
 }
 
 /* =========================================================
-   DUAL VERIFICATION RESULT
+   VERIFICATION RESULT
 ========================================================= */
 
 function DualVerificationResult({
@@ -5389,28 +7336,12 @@ function DualVerificationResult({
             <p
               className="
                 text-xs
-                leading-5
                 text-amber-100/60
               "
             >
               Blockchain verification
               was not completed.
             </p>
-
-            {result.blockchain.error && (
-              <p
-                className="
-                  mt-2
-                  text-xs
-                  leading-5
-                  text-white/25
-                "
-              >
-                {
-                  result.blockchain.error
-                }
-              </p>
-            )}
           </div>
         )}
 
@@ -5446,33 +7377,6 @@ function DualVerificationResult({
             }
           />
         </div>
-
-        {result.blockchain.transactionHash && (
-          <LongValue
-            label="TRANSACTION"
-            value={
-              result.blockchain.transactionHash
-            }
-          />
-        )}
-
-        {result.blockchain.contractAddress && (
-          <LongValue
-            label="CONTRACT"
-            value={
-              result.blockchain.contractAddress
-            }
-          />
-        )}
-
-        {result.blockchain.evidenceKey && (
-          <LongValue
-            label="OPAQUE EVIDENCE KEY"
-            value={
-              result.blockchain.evidenceKey
-            }
-          />
-        )}
       </div>
 
       <VerificationExplanation
@@ -5514,7 +7418,7 @@ function VerificationExplanation({
     boolean
 }) {
   let message =
-    "Blockchain verification is unavailable or the evidence is not anchored."
+    "Blockchain verification is unavailable or this evidence is not anchored."
 
   if (
     blockchainChecked &&
@@ -5539,7 +7443,7 @@ function VerificationExplanation({
     currentHashVerified
   ) {
     message =
-      "The current file still matches the blockchain anchor, but the PostgreSQL hash does not."
+      "The current file matches the blockchain anchor, but the PostgreSQL hash has changed."
   } else if (
     blockchainChecked &&
     fileVerified &&
@@ -5552,7 +7456,7 @@ function VerificationExplanation({
     blockchainChecked
   ) {
     message =
-      "One or more integrity comparisons failed. Review the individual checks before trusting this evidence state."
+      "One or more integrity checks failed. Review each comparison before relying on this evidence state."
   }
 
   return (
@@ -5696,7 +7600,8 @@ function VerificationCheckCard({
 function ResultBadge({
   verified,
 }: {
-  verified: boolean
+  verified:
+    boolean
 }) {
   return (
     <span
@@ -5764,66 +7669,6 @@ function HashResult({
       >
         {hash}
       </p>
-    </div>
-  )
-}
-
-/* =========================================================
-   PLACEHOLDER
-========================================================= */
-
-function PlaceholderPage({
-  page,
-}: {
-  page: Page
-}) {
-  return (
-    <div
-      className="
-        glass
-        flex
-        min-h-[460px]
-        items-center
-        justify-center
-        rounded-[30px]
-        p-8
-        text-center
-      "
-    >
-      <div>
-        <Activity
-          size={30}
-          className="
-            mx-auto
-            text-white/25
-          "
-        />
-
-        <h3
-          className="
-            mt-5
-            text-xl
-            font-medium
-          "
-        >
-          {
-            pageInfo[
-              page
-            ].title
-          }
-        </h3>
-
-        <p
-          className="
-            mt-2
-            text-sm
-            text-white/30
-          "
-        >
-          We will build this
-          module in a later phase.
-        </p>
-      </div>
     </div>
   )
 }
@@ -6206,7 +8051,7 @@ function MetaItem({
       <p
         className="
           mt-1
-          max-w-[150px]
+          max-w-[180px]
           truncate
           text-xs
           text-white/50
@@ -6254,6 +8099,93 @@ function DetailCard({
       >
         {value}
       </p>
+    </div>
+  )
+}
+
+function BlockchainField({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className="
+        rounded-[18px]
+        border
+        border-white/[0.06]
+        bg-black/15
+        p-3
+      "
+    >
+      <p
+        className="
+          text-[10px]
+          text-white/20
+        "
+      >
+        {label}
+      </p>
+
+      <p
+        className="
+          mt-2
+          text-sm
+          text-white/55
+        "
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function LongValue({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className="
+        mt-4
+      "
+    >
+      <p
+        className="
+          text-[10px]
+          text-white/20
+        "
+      >
+        {label}
+      </p>
+
+      <div
+        className="
+          mt-2
+          rounded-[18px]
+          border
+          border-white/[0.06]
+          bg-black/20
+          p-3
+        "
+      >
+        <p
+          className="
+            break-all
+            font-mono
+            text-[10px]
+            leading-5
+            text-white/40
+          "
+        >
+          {value}
+        </p>
+      </div>
     </div>
   )
 }
@@ -7089,7 +9021,7 @@ function getErrorMessage(
 }
 
 /* =========================================================
-   BROWSER SHA-256 PREVIEW
+   HELPERS
 ========================================================= */
 
 async function calculateSHA256(
@@ -7120,10 +9052,6 @@ async function calculateSHA256(
     )
     .join("")
 }
-
-/* =========================================================
-   TYPE DETECTION
-========================================================= */
 
 function detectEvidenceType(
   filename: string,
@@ -7217,10 +9145,6 @@ function detectEvidenceType(
   return "Other"
 }
 
-/* =========================================================
-   FILE SIZE
-========================================================= */
-
 function formatBytes(
   bytes: number,
 ) {
@@ -7262,6 +9186,62 @@ function formatBytes(
       ? 0
       : 1,
   )} ${units[index]}`
+}
+
+function formatDateTime(
+  value: string,
+) {
+  const date =
+    new Date(
+      value,
+    )
+
+  if (
+    Number.isNaN(
+      date.getTime(),
+    )
+  ) {
+    return value
+  }
+
+  return date.toLocaleString(
+    undefined,
+    {
+      dateStyle:
+        "medium",
+
+      timeStyle:
+        "short",
+    },
+  )
+}
+
+function formatAction(
+  action:
+    CustodyAction,
+) {
+  return action
+    .toLowerCase()
+    .replace(
+      /(^|\s)\S/g,
+      (character) =>
+        character.toUpperCase(),
+    )
+}
+
+function formatAuditEvent(
+  eventType: string,
+) {
+  return eventType
+    .split("_")
+    .map(
+      (word) =>
+        word.charAt(0) +
+        word
+          .slice(1)
+          .toLowerCase(),
+    )
+    .join(" ")
 }
 
 /* =========================================================
