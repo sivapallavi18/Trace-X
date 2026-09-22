@@ -51,8 +51,111 @@ import {
 const API_BASE_URL =
   "http://localhost:5000"
 
+const AUTH_TOKEN_KEY =
+  "tracex_auth_token"
+
 const BROWSER_HASH_LIMIT =
   256 * 1024 * 1024
+
+/* =========================================================
+   AUTHENTICATION TYPES
+========================================================= */
+
+type UserRole =
+  | "Investigator"
+  | "Forensic Analyst"
+  | "Supervisor"
+  | "Reviewer"
+  | "Admin"
+
+type AuthUser = {
+  id: number
+  email: string
+  name: string
+  role: UserRole
+  active?: boolean
+  createdAt?: string
+  lastLoginAt?: string | null
+}
+
+type LoginResponse = {
+  success: boolean
+  message: string
+  token: string
+  tokenType: string
+  expiresIn: string
+  user: AuthUser
+}
+
+type MeResponse = {
+  success: boolean
+  user: AuthUser
+}
+
+/* =========================================================
+   PERMISSIONS
+========================================================= */
+
+type Permission =
+  | "createCase"
+  | "uploadEvidence"
+  | "transferCustody"
+  | "verifyEvidence"
+  | "retryBlockchain"
+  | "viewAudit"
+
+const ROLE_PERMISSIONS:
+  Record<
+    UserRole,
+    Permission[]
+  > = {
+    Investigator: [
+      "createCase",
+      "uploadEvidence",
+      "transferCustody",
+      "verifyEvidence",
+    ],
+
+    "Forensic Analyst": [
+      "uploadEvidence",
+      "transferCustody",
+      "verifyEvidence",
+    ],
+
+    Supervisor: [
+      "createCase",
+      "uploadEvidence",
+      "transferCustody",
+      "verifyEvidence",
+      "retryBlockchain",
+      "viewAudit",
+    ],
+
+    Reviewer: [
+      "verifyEvidence",
+      "viewAudit",
+    ],
+
+    Admin: [
+      "createCase",
+      "uploadEvidence",
+      "transferCustody",
+      "verifyEvidence",
+      "retryBlockchain",
+      "viewAudit",
+    ],
+  }
+
+function hasPermission(
+  role: UserRole,
+  permission: Permission,
+) {
+  return ROLE_PERMISSIONS[
+    role
+  ].includes(
+    permission,
+  )
+}
 
 /* =========================================================
    GENERIC API TYPES
@@ -358,26 +461,31 @@ const navigation = [
     label: "Dashboard",
     icon: LayoutDashboard,
   },
+
   {
     id: "cases",
     label: "Cases",
     icon: FolderKanban,
   },
+
   {
     id: "evidence",
     label: "Evidence",
     icon: FileText,
   },
+
   {
     id: "transfers",
     label: "Transfers",
     icon: ArrowLeftRight,
   },
+
   {
     id: "verify",
     label: "Verify",
     icon: ScanSearch,
   },
+
   {
     id: "audit",
     label: "Audit Log",
@@ -388,49 +496,62 @@ const navigation = [
 type Page =
   (typeof navigation)[number]["id"]
 
-const pageInfo: Record<
-  Page,
-  {
-    title: string
-    description: string
+const pageInfo:
+  Record<
+    Page,
+    {
+      title: string
+      description: string
+    }
+  > = {
+    dashboard: {
+      title:
+        "Dashboard",
+
+      description:
+        "Overview of evidence integrity, blockchain anchoring and investigations.",
+    },
+
+    cases: {
+      title:
+        "Cases",
+
+      description:
+        "Manage investigations and associated digital evidence.",
+    },
+
+    evidence: {
+      title:
+        "Evidence",
+
+      description:
+        "Register, store and blockchain-anchor digital forensic evidence.",
+    },
+
+    transfers: {
+      title:
+        "Custody Transfers",
+
+      description:
+        "Transfer evidence custody and inspect its blockchain-backed chain of custody.",
+    },
+
+    verify: {
+      title:
+        "Integrity Verification",
+
+      description:
+        "Compare stored evidence against PostgreSQL and the blockchain anchor.",
+    },
+
+    audit: {
+      title:
+        "Audit Log",
+
+      description:
+        "Review append-only TRACE-X evidence and custody activity.",
+    },
   }
-> = {
-  dashboard: {
-    title: "Dashboard",
-    description:
-      "Overview of evidence integrity, blockchain anchoring and investigations.",
-  },
-
-  cases: {
-    title: "Cases",
-    description:
-      "Manage investigations and associated digital evidence.",
-  },
-
-  evidence: {
-    title: "Evidence",
-    description:
-      "Register, store and blockchain-anchor digital forensic evidence.",
-  },
-
-  transfers: {
-    title: "Custody Transfers",
-    description:
-      "Transfer evidence custody and inspect its blockchain-backed chain of custody.",
-  },
-
-  verify: {
-    title: "Integrity Verification",
-    description:
-      "Compare stored evidence against PostgreSQL and the blockchain anchor.",
-  },
-
-  audit: {
-    title: "Audit Log",
-    description:
-      "Review append-only TRACE-X evidence and custody activity.",
-  },
-}
 
 /* =========================================================
    APPLICATION
@@ -438,16 +559,18 @@ const pageInfo: Record<
 
 function App() {
   const [
-    authenticated,
-    setAuthenticated,
+    user,
+    setUser,
   ] =
-    useState(false)
+    useState<
+      AuthUser | null
+    >(null)
 
   const [
-    showPassword,
-    setShowPassword,
+    authInitializing,
+    setAuthInitializing,
   ] =
-    useState(false)
+    useState(true)
 
   const [
     activePage,
@@ -494,10 +617,110 @@ function App() {
     >(null)
 
   /* -------------------------------------------------------
-     LOAD DATA
+     RESTORE SESSION
+  ------------------------------------------------------- */
+
+  useEffect(() => {
+    const token =
+      sessionStorage.getItem(
+        AUTH_TOKEN_KEY,
+      )
+
+    if (!token) {
+      setAuthInitializing(
+        false,
+      )
+
+      return
+    }
+
+    void requestJson<
+      MeResponse
+    >(
+      "/api/auth/me",
+    )
+      .then(
+        (response) => {
+          setUser(
+            response.user,
+          )
+        },
+      )
+      .catch(
+        () => {
+          sessionStorage
+            .removeItem(
+              AUTH_TOKEN_KEY,
+            )
+
+          setUser(
+            null,
+          )
+        },
+      )
+      .finally(
+        () => {
+          setAuthInitializing(
+            false,
+          )
+        },
+      )
+  }, [])
+
+  /* -------------------------------------------------------
+     AUTOMATIC LOGOUT WHEN JWT EXPIRES
+  ------------------------------------------------------- */
+
+  useEffect(() => {
+    function handleExpiredSession() {
+      sessionStorage
+        .removeItem(
+          AUTH_TOKEN_KEY,
+        )
+
+      setUser(
+        null,
+      )
+
+      setCases(
+        [],
+      )
+
+      setEvidence(
+        [],
+      )
+
+      setActivePage(
+        "dashboard",
+      )
+
+      setApiError(
+        null,
+      )
+    }
+
+    window.addEventListener(
+      "tracex-auth-expired",
+      handleExpiredSession,
+    )
+
+    return () => {
+      window.removeEventListener(
+        "tracex-auth-expired",
+        handleExpiredSession,
+      )
+    }
+  }, [])
+
+  /* -------------------------------------------------------
+     LOAD BACKEND DATA
   ------------------------------------------------------- */
 
   async function loadBackendData() {
+    if (!user) {
+      return
+    }
+
     setApiLoading(
       true,
     )
@@ -546,16 +769,103 @@ function App() {
   }
 
   useEffect(() => {
-    if (
-      !authenticated
-    ) {
+    if (!user) {
       return
     }
 
     void loadBackendData()
   }, [
-    authenticated,
+    user,
   ])
+
+  /* -------------------------------------------------------
+     LOGIN
+  ------------------------------------------------------- */
+
+  async function login(
+    email: string,
+    password: string,
+  ) {
+    const response =
+      await requestJson<
+        LoginResponse
+      >(
+        "/api/auth/login",
+        {
+          method:
+            "POST",
+
+          body:
+            JSON.stringify({
+              email,
+              password,
+            }),
+        },
+      )
+
+    sessionStorage.setItem(
+      AUTH_TOKEN_KEY,
+      response.token,
+    )
+
+    setUser(
+      response.user,
+    )
+
+    setActivePage(
+      "dashboard",
+    )
+  }
+
+  /* -------------------------------------------------------
+     LOGOUT
+  ------------------------------------------------------- */
+
+  async function logout() {
+    try {
+      if (
+        sessionStorage.getItem(
+          AUTH_TOKEN_KEY,
+        )
+      ) {
+        await requestJson(
+          "/api/auth/logout",
+          {
+            method:
+              "POST",
+          },
+        )
+      }
+    } catch {
+      // Logout remains valid client-side
+      // even if the backend cannot be reached.
+    } finally {
+      sessionStorage
+        .removeItem(
+          AUTH_TOKEN_KEY,
+        )
+
+      setUser(
+        null,
+      )
+
+      setCases(
+        [],
+      )
+
+      setEvidence(
+        [],
+      )
+
+      setApiError(
+        null,
+      )
+
+      setActivePage(
+        "dashboard",
+      )
+    }
+  }
 
   /* -------------------------------------------------------
      CREATE CASE
@@ -670,7 +980,7 @@ function App() {
   }
 
   /* -------------------------------------------------------
-     RETRY EVIDENCE ANCHOR
+     RETRY EVIDENCE BLOCKCHAIN ANCHOR
   ------------------------------------------------------- */
 
   async function retryBlockchainAnchor(
@@ -809,7 +1119,7 @@ function App() {
   }
 
   /* -------------------------------------------------------
-     RETRY CUSTODY EVENT
+     RETRY CUSTODY ANCHOR
   ------------------------------------------------------- */
 
   async function retryCustodyAnchor(
@@ -830,25 +1140,67 @@ function App() {
     return response.data
   }
 
+  /* -------------------------------------------------------
+     AUTH INITIALIZATION SCREEN
+  ------------------------------------------------------- */
+
   if (
-    !authenticated
+    authInitializing
   ) {
     return (
+      <AuthLoadingScreen />
+    )
+  }
+
+  /* -------------------------------------------------------
+     LOGIN SCREEN
+  ------------------------------------------------------- */
+
+  if (!user) {
+    return (
       <LoginScreen
-        showPassword={
-          showPassword
-        }
-        setShowPassword={
-          setShowPassword
-        }
-        onLogin={() =>
-          setAuthenticated(
-            true,
-          )
+        onLogin={
+          login
         }
       />
     )
   }
+
+  const canCreateCase =
+    hasPermission(
+      user.role,
+      "createCase",
+    )
+
+  const canUploadEvidence =
+    hasPermission(
+      user.role,
+      "uploadEvidence",
+    )
+
+  const canTransferCustody =
+    hasPermission(
+      user.role,
+      "transferCustody",
+    )
+
+  const canVerifyEvidence =
+    hasPermission(
+      user.role,
+      "verifyEvidence",
+    )
+
+  const canRetryBlockchain =
+    hasPermission(
+      user.role,
+      "retryBlockchain",
+    )
+
+  const canViewAudit =
+    hasPermission(
+      user.role,
+      "viewAudit",
+    )
 
   return (
     <main
@@ -883,21 +1235,18 @@ function App() {
         "
       >
         <SidebarContent
+          user={
+            user
+          }
           activePage={
             activePage
           }
           setActivePage={
             setActivePage
           }
-          onLogout={() => {
-            setAuthenticated(
-              false,
-            )
-
-            setActivePage(
-              "dashboard",
-            )
-          }}
+          onLogout={() =>
+            void logout()
+          }
         />
       </aside>
 
@@ -910,13 +1259,16 @@ function App() {
           <>
             <motion.div
               initial={{
-                opacity: 0,
+                opacity:
+                  0,
               }}
               animate={{
-                opacity: 1,
+                opacity:
+                  1,
               }}
               exit={{
-                opacity: 0,
+                opacity:
+                  0,
               }}
               onClick={() =>
                 setMobileMenuOpen(
@@ -935,16 +1287,25 @@ function App() {
 
             <motion.aside
               initial={{
-                x: -300,
-                opacity: 0,
+                x:
+                  -300,
+
+                opacity:
+                  0,
               }}
               animate={{
-                x: 0,
-                opacity: 1,
+                x:
+                  0,
+
+                opacity:
+                  1,
               }}
               exit={{
-                x: -300,
-                opacity: 0,
+                x:
+                  -300,
+
+                opacity:
+                  0,
               }}
               transition={{
                 type:
@@ -998,6 +1359,9 @@ function App() {
               </button>
 
               <SidebarContent
+                user={
+                  user
+                }
                 activePage={
                   activePage
                 }
@@ -1012,15 +1376,9 @@ function App() {
                     false,
                   )
                 }}
-                onLogout={() => {
-                  setAuthenticated(
-                    false,
-                  )
-
-                  setActivePage(
-                    "dashboard",
-                  )
-                }}
+                onLogout={() =>
+                  void logout()
+                }
               />
             </motion.aside>
           </>
@@ -1043,10 +1401,12 @@ function App() {
         <header
           className="
             flex
-            h-[86px]
+            min-h-[86px]
             items-center
             justify-between
+            gap-4
             px-5
+            py-3
             md:px-8
             lg:px-10
           "
@@ -1138,29 +1498,71 @@ function App() {
               Blockchain Enabled
             </div>
 
-            <motion.button
-              type="button"
-              whileTap={{
-                scale:
-                  0.95,
-              }}
+            <div
               className="
                 glass
                 flex
-                h-11
-                w-11
                 items-center
-                justify-center
+                gap-3
                 rounded-2xl
+                px-3
+                py-2
               "
             >
-              <UserRound
-                size={18}
+              <div
                 className="
-                  text-white/60
+                  flex
+                  h-8
+                  w-8
+                  items-center
+                  justify-center
+                  rounded-xl
+                  border
+                  border-white/10
+                  bg-white/[0.05]
                 "
-              />
-            </motion.button>
+              >
+                <UserRound
+                  size={15}
+                  className="
+                    text-white/50
+                  "
+                />
+              </div>
+
+              <div
+                className="
+                  hidden
+                  min-w-0
+                  sm:block
+                "
+              >
+                <p
+                  className="
+                    max-w-[170px]
+                    truncate
+                    text-xs
+                    text-white/65
+                  "
+                >
+                  {
+                    user.name
+                  }
+                </p>
+
+                <p
+                  className="
+                    mt-0.5
+                    text-[10px]
+                    text-white/25
+                  "
+                >
+                  {
+                    user.role
+                  }
+                </p>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -1229,6 +1631,9 @@ function App() {
               {activePage ===
               "dashboard" ? (
                 <Dashboard
+                  user={
+                    user
+                  }
                   cases={
                     cases
                   }
@@ -1241,6 +1646,9 @@ function App() {
                 <CasesPage
                   cases={
                     cases
+                  }
+                  canCreate={
+                    canCreateCase
                   }
                   onCreateCase={
                     createCaseOnServer
@@ -1255,6 +1663,15 @@ function App() {
                   cases={
                     cases
                   }
+                  user={
+                    user
+                  }
+                  canUpload={
+                    canUploadEvidence
+                  }
+                  canRetryBlockchain={
+                    canRetryBlockchain
+                  }
                   onUploadEvidence={
                     uploadEvidenceOnServer
                   }
@@ -1267,6 +1684,12 @@ function App() {
                 <TransfersPage
                   evidence={
                     evidence
+                  }
+                  canTransfer={
+                    canTransferCustody
+                  }
+                  canRetryBlockchain={
+                    canRetryBlockchain
                   }
                   onTransfer={
                     transferEvidenceCustody
@@ -1281,6 +1704,12 @@ function App() {
                   evidence={
                     evidence
                   }
+                  canVerify={
+                    canVerifyEvidence
+                  }
+                  canRetryBlockchain={
+                    canRetryBlockchain
+                  }
                   onVerify={
                     verifyEvidenceOnServer
                   }
@@ -1290,7 +1719,16 @@ function App() {
                 />
               ) : activePage ===
                 "audit" ? (
-                <AuditLogPage />
+                canViewAudit ? (
+                  <AuditLogPage />
+                ) : (
+                  <AccessRestricted
+                    role={
+                      user.role
+                    }
+                    description="Your role does not have permission to view the append-only audit log."
+                  />
+                )
               ) : null}
             </motion.div>
           </AnimatePresence>
@@ -1301,14 +1739,69 @@ function App() {
 }
 
 /* =========================================================
+   AUTH LOADING SCREEN
+========================================================= */
+
+function AuthLoadingScreen() {
+  return (
+    <main
+      className="
+        relative
+        flex
+        min-h-screen
+        items-center
+        justify-center
+        overflow-hidden
+        bg-[#050506]
+        text-white
+      "
+    >
+      <AmbientBackground />
+
+      <div
+        className="
+          relative
+          z-10
+          text-center
+        "
+      >
+        <LoaderCircle
+          size={30}
+          className="
+            mx-auto
+            animate-spin
+            text-white/40
+          "
+        />
+
+        <p
+          className="
+            mt-4
+            text-sm
+            text-white/35
+          "
+        >
+          Restoring secure
+          TRACE-X session...
+        </p>
+      </div>
+    </main>
+  )
+}
+
+/* =========================================================
    SIDEBAR
 ========================================================= */
 
 function SidebarContent({
+  user,
   activePage,
   setActivePage,
   onLogout,
 }: {
+  user:
+    AuthUser
+
   activePage:
     Page
 
@@ -1318,6 +1811,17 @@ function SidebarContent({
   onLogout:
     () => void
 }) {
+  const visibleNavigation =
+    navigation.filter(
+      (item) =>
+        item.id !==
+          "audit" ||
+        hasPermission(
+          user.role,
+          "viewAudit",
+        ),
+    )
+
   return (
     <>
       <div
@@ -1376,7 +1880,7 @@ function SidebarContent({
           space-y-1.5
         "
       >
-        {navigation.map(
+        {visibleNavigation.map(
           (item) => {
             const Icon =
               item.icon
@@ -1469,45 +1973,46 @@ function SidebarContent({
           mb-3
           rounded-2xl
           border
-          border-emerald-400/10
-          bg-emerald-400/[0.04]
+          border-white/[0.07]
+          bg-white/[0.025]
           p-3
         "
       >
-        <div
+        <p
           className="
-            flex
-            items-center
-            gap-2
+            truncate
+            text-xs
+            text-white/60
           "
         >
-          <ShieldCheck
-            size={15}
-            className="
-              text-emerald-300
-            "
-          />
+          {
+            user.name
+          }
+        </p>
 
-          <span
-            className="
-              text-xs
-              text-emerald-200/70
-            "
-          >
-            TRACE-X Ready
-          </span>
-        </div>
+        <p
+          className="
+            mt-1
+            text-[10px]
+            text-blue-200/50
+          "
+        >
+          {
+            user.role
+          }
+        </p>
 
         <p
           className="
             mt-2
+            truncate
             text-[10px]
-            leading-4
-            text-white/25
+            text-white/20
           "
         >
-          Storage, blockchain and
-          custody tracking enabled
+          {
+            user.email
+          }
         </p>
       </div>
 
@@ -1738,9 +2243,13 @@ function ApiConnectionBanner({
 ========================================================= */
 
 function Dashboard({
+  user,
   cases,
   evidence,
 }: {
+  user:
+    AuthUser
+
   cases:
     InvestigationCase[]
 
@@ -1777,6 +2286,66 @@ function Dashboard({
 
   return (
     <>
+      <div
+        className="
+          mb-4
+          rounded-[24px]
+          border
+          border-blue-400/10
+          bg-blue-400/[0.035]
+          p-4
+        "
+      >
+        <div
+          className="
+            flex
+            items-start
+            gap-3
+          "
+        >
+          <ShieldCheck
+            size={18}
+            className="
+              mt-0.5
+              text-blue-300
+            "
+          />
+
+          <div>
+            <p
+              className="
+                text-sm
+                text-white/65
+              "
+            >
+              Signed in as{" "}
+              <span
+                className="
+                  text-white
+                "
+              >
+                {
+                  user.name
+                }
+              </span>
+            </p>
+
+            <p
+              className="
+                mt-1
+                text-xs
+                text-white/30
+              "
+            >
+              Role:{" "}
+              {
+                user.role
+              }
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div
         className="
           grid
@@ -2012,7 +2581,7 @@ function Dashboard({
               font-medium
             "
           >
-            TRACE-X Integrity
+            TRACE-X Security
           </h3>
 
           <p
@@ -2023,11 +2592,10 @@ function Dashboard({
               text-white/30
             "
           >
-            Evidence bytes,
-            operational metadata
-            and cryptographic
-            anchors remain
-            separated.
+            Authenticated access,
+            role-based authorization
+            and blockchain-backed
+            evidence integrity.
           </p>
 
           <div
@@ -2037,22 +2605,22 @@ function Dashboard({
             "
           >
             <StorageRow
-              label="Evidence bytes"
+              label="Authentication"
+              value="JWT"
+            />
+
+            <StorageRow
+              label="Authorization"
+              value="RBAC"
+            />
+
+            <StorageRow
+              label="Evidence"
               value="Off-chain"
             />
 
             <StorageRow
-              label="Metadata"
-              value="PostgreSQL"
-            />
-
-            <StorageRow
-              label="Hash"
-              value="SHA-256"
-            />
-
-            <StorageRow
-              label="Custody"
+              label="Integrity"
               value="Blockchain"
             />
           </div>
@@ -2076,7 +2644,8 @@ function StatCard({
   return (
     <motion.div
       whileHover={{
-        y: -3,
+        y:
+          -3,
       }}
       className="
         glass
@@ -2181,10 +2750,14 @@ function StorageRow({
 
 function CasesPage({
   cases,
+  canCreate,
   onCreateCase,
 }: {
   cases:
     InvestigationCase[]
+
+  canCreate:
+    boolean
 
   onCreateCase: (
     payload:
@@ -2285,7 +2858,8 @@ function CasesPage({
   async function submit() {
     if (
       !title.trim() ||
-      creating
+      creating ||
+      !canCreate
     ) {
       return
     }
@@ -2352,21 +2926,25 @@ function CasesPage({
           placeholder="Search cases..."
         />
 
-        <PrimaryButton
-          onClick={() => {
-            reset()
+        {canCreate ? (
+          <PrimaryButton
+            onClick={() => {
+              reset()
 
-            setCreateOpen(
-              true,
-            )
-          }}
-        >
-          <Plus
-            size={16}
-          />
+              setCreateOpen(
+                true,
+              )
+            }}
+          >
+            <Plus
+              size={16}
+            />
 
-          Create Case
-        </PrimaryButton>
+            Create Case
+          </PrimaryButton>
+        ) : (
+          <ReadOnlyBadge />
+        )}
       </div>
 
       <div
@@ -2541,7 +3119,8 @@ function CasesPage({
       </div>
 
       <AnimatePresence>
-        {createOpen && (
+        {createOpen &&
+          canCreate && (
           <>
             <ModalBackdrop
               onClose={() =>
@@ -2737,6 +3316,9 @@ function CasesPage({
 function EvidencePage({
   evidence,
   cases,
+  user,
+  canUpload,
+  canRetryBlockchain,
   onUploadEvidence,
   onRetryAnchor,
 }: {
@@ -2745,6 +3327,15 @@ function EvidencePage({
 
   cases:
     InvestigationCase[]
+
+  user:
+    AuthUser
+
+  canUpload:
+    boolean
+
+  canRetryBlockchain:
+    boolean
 
   onUploadEvidence: (
     payload:
@@ -2803,7 +3394,7 @@ function EvidencePage({
     setCustodian,
   ] =
     useState(
-      "Investigator A",
+      user.name,
     )
 
   const [
@@ -2872,9 +3463,7 @@ function EvidencePage({
   ])
 
   useEffect(() => {
-    if (
-      !selected
-    ) {
+    if (!selected) {
       return
     }
 
@@ -3003,7 +3592,7 @@ function EvidencePage({
     )
 
     setCustodian(
-      "Investigator A",
+      user.name,
     )
 
     setDescription(
@@ -3035,7 +3624,8 @@ function EvidencePage({
     if (
       !selectedFile ||
       !caseId ||
-      uploading
+      uploading ||
+      !canUpload
     ) {
       return
     }
@@ -3138,21 +3728,25 @@ function EvidencePage({
           placeholder="Search evidence, case or SHA-256..."
         />
 
-        <PrimaryButton
-          onClick={() => {
-            reset()
+        {canUpload ? (
+          <PrimaryButton
+            onClick={() => {
+              reset()
 
-            setRegisterOpen(
-              true,
-            )
-          }}
-        >
-          <UploadCloud
-            size={17}
-          />
+              setRegisterOpen(
+                true,
+              )
+            }}
+          >
+            <UploadCloud
+              size={17}
+            />
 
-          Register Evidence
-        </PrimaryButton>
+            Register Evidence
+          </PrimaryButton>
+        ) : (
+          <ReadOnlyBadge />
+        )}
       </div>
 
       <div
@@ -3219,7 +3813,8 @@ function EvidencePage({
                 item.id
               }
               whileHover={{
-                y: -2,
+                y:
+                  -2,
               }}
               onClick={() =>
                 setSelected(
@@ -3411,6 +4006,9 @@ function EvidencePage({
             evidence={
               selected
             }
+            canRetryBlockchain={
+              canRetryBlockchain
+            }
             onClose={() =>
               setSelected(
                 null,
@@ -3424,7 +4022,8 @@ function EvidencePage({
       </AnimatePresence>
 
       <AnimatePresence>
-        {registerOpen && (
+        {registerOpen &&
+          canUpload && (
           <>
             <ModalBackdrop
               onClose={() =>
@@ -3793,7 +4392,7 @@ function EvidencePage({
                   <FormField
                     label="Initial custodian"
                   >
-                    <select
+                    <input
                       value={
                         custodian
                       }
@@ -3807,25 +4406,9 @@ function EvidencePage({
                         )
                       }
                       className={
-                        selectClass
+                        inputClass
                       }
-                    >
-                      <option>
-                        Investigator A
-                      </option>
-
-                      <option>
-                        Investigator B
-                      </option>
-
-                      <option>
-                        Investigator C
-                      </option>
-
-                      <option>
-                        Forensic Analyst A
-                      </option>
-                    </select>
+                    />
                   </FormField>
                 </div>
 
@@ -3896,11 +4479,19 @@ function EvidencePage({
 
 function TransfersPage({
   evidence,
+  canTransfer,
+  canRetryBlockchain,
   onTransfer,
   onRetryCustodyAnchor,
 }: {
   evidence:
     EvidenceRecord[]
+
+  canTransfer:
+    boolean
+
+  canRetryBlockchain:
+    boolean
 
   onTransfer: (
     evidenceId:
@@ -4009,7 +4600,8 @@ function TransfersPage({
   useEffect(() => {
     if (
       selectedId ||
-      evidence.length === 0
+      evidence.length ===
+        0
     ) {
       return
     }
@@ -4073,9 +4665,7 @@ function TransfersPage({
   }
 
   useEffect(() => {
-    if (
-      !selectedId
-    ) {
+    if (!selectedId) {
       setCustodyEvents(
         [],
       )
@@ -4123,7 +4713,8 @@ function TransfersPage({
       !selectedEvidence ||
       !destination.trim() ||
       !reason.trim() ||
-      transferring
+      transferring ||
+      !canTransfer
     ) {
       return
     }
@@ -4176,6 +4767,12 @@ function TransfersPage({
     eventId:
       number,
   ) {
+    if (
+      !canRetryBlockchain
+    ) {
+      return
+    }
+
     setRetryingEventId(
       eventId,
     )
@@ -4189,9 +4786,7 @@ function TransfersPage({
         eventId,
       )
 
-      if (
-        selectedId
-      ) {
+      if (selectedId) {
         await loadHistory(
           selectedId,
         )
@@ -4258,7 +4853,8 @@ function TransfersPage({
               "
             >
               Select evidence to
-              manage custody.
+              inspect its custody
+              chain.
             </p>
           </div>
         </div>
@@ -4399,20 +4995,6 @@ function TransfersPage({
               )
             },
           )}
-
-          {filtered.length ===
-            0 && (
-            <div
-              className="
-                py-12
-                text-center
-                text-sm
-                text-white/25
-              "
-            >
-              No evidence found.
-            </div>
-          )}
         </div>
       </div>
 
@@ -4504,249 +5086,227 @@ function TransfersPage({
 
               <Divider />
 
-              <h4
-                className="
-                  text-sm
-                  font-medium
-                "
-              >
-                Transfer Custody
-              </h4>
-
-              <p
-                className="
-                  mt-2
-                  text-xs
-                  leading-5
-                  text-white/25
-                "
-              >
-                A custody transfer
-                changes the current
-                custodian in
-                PostgreSQL and creates
-                a SHA-256 custody
-                event digest that is
-                anchored on-chain.
-              </p>
-
-              <div
-                className="
-                  mt-5
-                  grid
-                  gap-4
-                  md:grid-cols-2
-                "
-              >
-                <FormField
-                  label="Current custodian"
-                >
-                  <input
-                    value={
-                      selectedEvidence.custodian
-                    }
-                    readOnly
-                    className={`${inputClass} opacity-60`}
-                  />
-                </FormField>
-
-                <FormField
-                  label="Transfer to"
-                >
-                  <select
-                    value={
-                      destination
-                    }
-                    onChange={(
-                      event,
-                    ) =>
-                      setDestination(
-                        event
-                          .target
-                          .value,
-                      )
-                    }
-                    className={
-                      selectClass
-                    }
-                  >
-                    <option>
-                      Investigator A
-                    </option>
-
-                    <option>
-                      Investigator B
-                    </option>
-
-                    <option>
-                      Investigator C
-                    </option>
-
-                    <option>
-                      Forensic Analyst A
-                    </option>
-
-                    <option>
-                      Forensic Analyst B
-                    </option>
-
-                    <option>
-                      Supervisor A
-                    </option>
-
-                    <option>
-                      Evidence Reviewer A
-                    </option>
-                  </select>
-                </FormField>
-              </div>
-
-              <div
-                className="
-                  mt-4
-                "
-              >
-                <FormField
-                  label="Transfer reason"
-                >
-                  <textarea
-                    rows={4}
-                    value={
-                      reason
-                    }
-                    onChange={(
-                      event,
-                    ) =>
-                      setReason(
-                        event
-                          .target
-                          .value,
-                      )
-                    }
-                    className={
-                      textareaClass
-                    }
-                    placeholder="Example: Transferred to forensic laboratory for detailed analysis"
-                  />
-                </FormField>
-              </div>
-
-              {selectedEvidence.blockchainStatus !==
-                "Anchored" && (
-                <div
-                  className="
-                    mt-4
-                  "
-                >
-                  <FormError
-                    message="This evidence must have a healthy blockchain anchor before custody can be transferred."
-                  />
-                </div>
-              )}
-
-              {transferError && (
-                <div
-                  className="
-                    mt-4
-                  "
-                >
-                  <FormError
-                    message={
-                      transferError
-                    }
-                  />
-                </div>
-              )}
-
-              {transferMessage && (
-                <div
-                  className="
-                    mt-4
-                    flex
-                    items-start
-                    gap-3
-                    rounded-[18px]
-                    border
-                    border-emerald-400/15
-                    bg-emerald-400/[0.05]
-                    p-3
-                  "
-                >
-                  <CheckCircle2
-                    size={16}
+              {canTransfer ? (
+                <>
+                  <h4
                     className="
-                      mt-0.5
-                      shrink-0
-                      text-emerald-300
+                      text-sm
+                      font-medium
                     "
-                  />
+                  >
+                    Transfer Custody
+                  </h4>
 
                   <p
                     className="
+                      mt-2
                       text-xs
                       leading-5
-                      text-emerald-200/70
+                      text-white/25
                     "
                   >
-                    {
-                      transferMessage
-                    }
+                    The transfer is
+                    written to
+                    PostgreSQL and its
+                    custody-event
+                    digest is anchored
+                    on-chain.
                   </p>
-                </div>
-              )}
 
-              <button
-                type="button"
-                disabled={
-                  transferring ||
-                  !reason.trim() ||
-                  !destination.trim() ||
-                  selectedEvidence.blockchainStatus !==
-                    "Anchored" ||
-                  destination
-                    .trim()
-                    .toLowerCase() ===
-                    selectedEvidence.custodian
-                      .trim()
-                      .toLowerCase()
-                }
-                onClick={() =>
-                  void submitTransfer()
-                }
-                className="
-                  mt-5
-                  flex
-                  h-12
-                  w-full
-                  items-center
-                  justify-center
-                  gap-2
-                  rounded-2xl
-                  bg-white
-                  text-sm
-                  font-semibold
-                  text-black
-                  disabled:cursor-not-allowed
-                  disabled:opacity-35
-                "
-              >
-                {transferring ? (
-                  <LoaderCircle
-                    size={17}
+                  <div
                     className="
-                      animate-spin
+                      mt-5
+                      grid
+                      gap-4
+                      md:grid-cols-2
                     "
-                  />
-                ) : (
-                  <ArrowLeftRight
-                    size={17}
-                  />
-                )}
+                  >
+                    <FormField
+                      label="Current custodian"
+                    >
+                      <input
+                        value={
+                          selectedEvidence.custodian
+                        }
+                        readOnly
+                        className={`${inputClass} opacity-60`}
+                      />
+                    </FormField>
 
-                {transferring
-                  ? "Recording Transfer..."
-                  : "Transfer Custody"}
-              </button>
+                    <FormField
+                      label="Transfer to"
+                    >
+                      <select
+                        value={
+                          destination
+                        }
+                        onChange={(
+                          event,
+                        ) =>
+                          setDestination(
+                            event
+                              .target
+                              .value,
+                          )
+                        }
+                        className={
+                          selectClass
+                        }
+                      >
+                        <option>
+                          Investigator A
+                        </option>
+
+                        <option>
+                          Investigator B
+                        </option>
+
+                        <option>
+                          Investigator C
+                        </option>
+
+                        <option>
+                          Forensic Analyst A
+                        </option>
+
+                        <option>
+                          Forensic Analyst B
+                        </option>
+
+                        <option>
+                          Supervisor A
+                        </option>
+
+                        <option>
+                          Evidence Reviewer A
+                        </option>
+                      </select>
+                    </FormField>
+                  </div>
+
+                  <div
+                    className="
+                      mt-4
+                    "
+                  >
+                    <FormField
+                      label="Transfer reason"
+                    >
+                      <textarea
+                        rows={4}
+                        value={
+                          reason
+                        }
+                        onChange={(
+                          event,
+                        ) =>
+                          setReason(
+                            event
+                              .target
+                              .value,
+                          )
+                        }
+                        className={
+                          textareaClass
+                        }
+                        placeholder="Example: Transferred to forensic laboratory for detailed analysis"
+                      />
+                    </FormField>
+                  </div>
+
+                  {selectedEvidence.blockchainStatus !==
+                    "Anchored" && (
+                    <div
+                      className="
+                        mt-4
+                      "
+                    >
+                      <FormError
+                        message="This evidence must have a healthy blockchain anchor before custody can be transferred."
+                      />
+                    </div>
+                  )}
+
+                  {transferError && (
+                    <div
+                      className="
+                        mt-4
+                      "
+                    >
+                      <FormError
+                        message={
+                          transferError
+                        }
+                      />
+                    </div>
+                  )}
+
+                  {transferMessage && (
+                    <SuccessPanel
+                      message={
+                        transferMessage
+                      }
+                    />
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={
+                      transferring ||
+                      !reason.trim() ||
+                      !destination.trim() ||
+                      selectedEvidence.blockchainStatus !==
+                        "Anchored" ||
+                      destination
+                        .trim()
+                        .toLowerCase() ===
+                        selectedEvidence.custodian
+                          .trim()
+                          .toLowerCase()
+                    }
+                    onClick={() =>
+                      void submitTransfer()
+                    }
+                    className="
+                      mt-5
+                      flex
+                      h-12
+                      w-full
+                      items-center
+                      justify-center
+                      gap-2
+                      rounded-2xl
+                      bg-white
+                      text-sm
+                      font-semibold
+                      text-black
+                      disabled:cursor-not-allowed
+                      disabled:opacity-35
+                    "
+                  >
+                    {transferring ? (
+                      <LoaderCircle
+                        size={17}
+                        className="
+                          animate-spin
+                        "
+                      />
+                    ) : (
+                      <ArrowLeftRight
+                        size={17}
+                      />
+                    )}
+
+                    {transferring
+                      ? "Recording Transfer..."
+                      : "Transfer Custody"}
+                  </button>
+                </>
+              ) : (
+                <PermissionNotice
+                  message="Your role can inspect custody history, but it cannot transfer evidence custody."
+                />
+              )}
             </div>
 
             <div
@@ -4914,6 +5474,9 @@ function TransfersPage({
                           custodyEvents.length -
                             1
                         }
+                        canRetryBlockchain={
+                          canRetryBlockchain
+                        }
                         retrying={
                           retryingEventId ===
                           event.id
@@ -4939,6 +5502,7 @@ function TransfersPage({
 function CustodyTimelineItem({
   event,
   isLast,
+  canRetryBlockchain,
   retrying,
   onRetry,
 }: {
@@ -4946,6 +5510,9 @@ function CustodyTimelineItem({
     CustodyEvent
 
   isLast:
+    boolean
+
+  canRetryBlockchain:
     boolean
 
   retrying:
@@ -5214,7 +5781,8 @@ function CustodyTimelineItem({
         )}
 
         {event.blockchainStatus ===
-          "Failed" && (
+          "Failed" &&
+          canRetryBlockchain && (
           <button
             type="button"
             disabled={
@@ -5542,9 +6110,8 @@ function AuditLogPage() {
                   text-white/25
                 "
               >
-                PostgreSQL audit
-                records generated by
-                TRACE-X custody
+                Authenticated TRACE-X
+                evidence and custody
                 operations.
               </p>
             </div>
@@ -5857,11 +6424,15 @@ function AuditLogRow({
 
 function EvidenceDetails({
   evidence,
+  canRetryBlockchain,
   onClose,
   onRetryAnchor,
 }: {
   evidence:
     EvidenceRecord
+
+  canRetryBlockchain:
+    boolean
 
   onClose:
     () => void
@@ -5918,6 +6489,12 @@ function EvidenceDetails({
   }
 
   async function retryAnchor() {
+    if (
+      !canRetryBlockchain
+    ) {
+      return
+    }
+
     setRetrying(
       true,
     )
@@ -6349,7 +6926,8 @@ function EvidenceDetails({
           )}
 
           {evidence.blockchainStatus ===
-            "Failed" && (
+            "Failed" &&
+            canRetryBlockchain && (
             <button
               type="button"
               disabled={
@@ -6391,6 +6969,20 @@ function EvidenceDetails({
                 ? "Retrying..."
                 : "Retry Blockchain Anchor"}
             </button>
+          )}
+
+          {evidence.blockchainStatus ===
+            "Failed" &&
+            !canRetryBlockchain && (
+            <div
+              className="
+                mt-4
+              "
+            >
+              <PermissionNotice
+                message="Only a Supervisor or Admin can retry blockchain anchoring."
+              />
+            </div>
           )}
 
           {retryError && (
@@ -6514,11 +7106,19 @@ function EvidenceDetails({
 
 function VerifyPage({
   evidence,
+  canVerify,
+  canRetryBlockchain,
   onVerify,
   onRetryAnchor,
 }: {
   evidence:
     EvidenceRecord[]
+
+  canVerify:
+    boolean
+
+  canRetryBlockchain:
+    boolean
 
   onVerify: (
     evidenceId:
@@ -6611,7 +7211,8 @@ function VerifyPage({
   async function verify() {
     if (
       !selectedId ||
-      verifying
+      verifying ||
+      !canVerify
     ) {
       return
     }
@@ -6653,7 +7254,8 @@ function VerifyPage({
   async function retryAnchor() {
     if (
       !selectedId ||
-      retrying
+      retrying ||
+      !canRetryBlockchain
     ) {
       return
     }
@@ -6984,7 +7586,8 @@ function VerifyPage({
             />
 
             {selectedEvidence.blockchainStatus ===
-              "Failed" && (
+              "Failed" &&
+              canRetryBlockchain && (
               <button
                 type="button"
                 disabled={
@@ -7027,59 +7630,65 @@ function VerifyPage({
               </button>
             )}
 
-            <motion.button
-              type="button"
-              disabled={
-                verifying
-              }
-              whileTap={
-                verifying
-                  ? {}
-                  : {
-                      scale:
-                        0.98,
-                    }
-              }
-              onClick={() =>
-                void verify()
-              }
-              className="
-                mt-5
-                flex
-                h-12
-                w-full
-                items-center
-                justify-center
-                gap-2
-                rounded-2xl
-                bg-white
-                text-sm
-                font-semibold
-                text-black
-                disabled:opacity-40
-              "
-            >
-              {verifying ? (
-                <>
-                  <LoaderCircle
-                    size={17}
-                    className="
-                      animate-spin
-                    "
-                  />
+            {canVerify ? (
+              <motion.button
+                type="button"
+                disabled={
+                  verifying
+                }
+                whileTap={
+                  verifying
+                    ? {}
+                    : {
+                        scale:
+                          0.98,
+                      }
+                }
+                onClick={() =>
+                  void verify()
+                }
+                className="
+                  mt-5
+                  flex
+                  h-12
+                  w-full
+                  items-center
+                  justify-center
+                  gap-2
+                  rounded-2xl
+                  bg-white
+                  text-sm
+                  font-semibold
+                  text-black
+                  disabled:opacity-40
+                "
+              >
+                {verifying ? (
+                  <>
+                    <LoaderCircle
+                      size={17}
+                      className="
+                        animate-spin
+                      "
+                    />
 
-                  Running checks...
-                </>
-              ) : (
-                <>
-                  <ScanSearch
-                    size={17}
-                  />
+                    Running checks...
+                  </>
+                ) : (
+                  <>
+                    <ScanSearch
+                      size={17}
+                    />
 
-                  Verify Evidence
-                </>
-              )}
-            </motion.button>
+                    Verify Evidence
+                  </>
+                )}
+              </motion.button>
+            ) : (
+              <PermissionNotice
+                message="Your role does not have permission to run evidence verification."
+              />
+            )}
 
             {error && (
               <div
@@ -7674,26 +8283,86 @@ function HashResult({
 }
 
 /* =========================================================
-   LOGIN
+   LOGIN SCREEN
 ========================================================= */
 
 function LoginScreen({
-  showPassword,
-  setShowPassword,
   onLogin,
 }: {
-  showPassword:
-    boolean
-
-  setShowPassword:
-    (
-      value:
-        boolean,
-    ) => void
-
-  onLogin:
-    () => void
+  onLogin: (
+    email: string,
+    password: string,
+  ) => Promise<void>
 }) {
+  const [
+    email,
+    setEmail,
+  ] =
+    useState(
+      "investigator@tracex.local",
+    )
+
+  const [
+    password,
+    setPassword,
+  ] =
+    useState("")
+
+  const [
+    showPassword,
+    setShowPassword,
+  ] =
+    useState(false)
+
+  const [
+    loggingIn,
+    setLoggingIn,
+  ] =
+    useState(false)
+
+  const [
+    error,
+    setError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  async function submit() {
+    if (
+      loggingIn ||
+      !email.trim() ||
+      !password
+    ) {
+      return
+    }
+
+    setLoggingIn(
+      true,
+    )
+
+    setError(
+      null,
+    )
+
+    try {
+      await onLogin(
+        email.trim(),
+        password,
+      )
+    } catch (loginError) {
+      setError(
+        getErrorMessage(
+          loginError,
+        ),
+      )
+    } finally {
+      setLoggingIn(
+        false,
+      )
+    }
+  }
+
   return (
     <main
       className="
@@ -7777,10 +8446,10 @@ function LoginScreen({
               text-white/35
             "
           >
-            Blockchain-backed
-            digital evidence
-            integrity and
-            chain-of-custody.
+            Authenticate to access
+            blockchain-backed
+            digital evidence and
+            chain-of-custody records.
           </p>
 
           <form
@@ -7793,7 +8462,7 @@ function LoginScreen({
             ) => {
               event.preventDefault()
 
-              onLogin()
+              void submit()
             }}
           >
             <FormField
@@ -7801,10 +8470,23 @@ function LoginScreen({
             >
               <input
                 type="email"
+                value={
+                  email
+                }
+                onChange={(
+                  event,
+                ) =>
+                  setEmail(
+                    event
+                      .target
+                      .value,
+                  )
+                }
                 className={
                   inputClass
                 }
                 placeholder="investigator@tracex.local"
+                autoComplete="username"
               />
             </FormField>
 
@@ -7822,8 +8504,21 @@ function LoginScreen({
                       ? "text"
                       : "password"
                   }
+                  value={
+                    password
+                  }
+                  onChange={(
+                    event,
+                  ) =>
+                    setPassword(
+                      event
+                        .target
+                        .value,
+                    )
+                  }
                   className={`${inputClass} pr-16`}
                   placeholder="Password"
+                  autoComplete="current-password"
                 />
 
                 <button
@@ -7849,8 +8544,21 @@ function LoginScreen({
               </div>
             </FormField>
 
+            {error && (
+              <FormError
+                message={
+                  error
+                }
+              />
+            )}
+
             <button
               type="submit"
+              disabled={
+                loggingIn ||
+                !email.trim() ||
+                !password
+              }
               className="
                 flex
                 h-12
@@ -7863,18 +8571,263 @@ function LoginScreen({
                 text-sm
                 font-semibold
                 text-black
+                disabled:cursor-not-allowed
+                disabled:opacity-40
               "
             >
-              Continue
+              {loggingIn ? (
+                <>
+                  <LoaderCircle
+                    size={17}
+                    className="
+                      animate-spin
+                    "
+                  />
 
-              <ArrowRight
-                size={17}
-              />
+                  Authenticating...
+                </>
+              ) : (
+                <>
+                  Sign in
+
+                  <ArrowRight
+                    size={17}
+                  />
+                </>
+              )}
             </button>
           </form>
+
+          <div
+            className="
+              mt-6
+              rounded-[20px]
+              border
+              border-white/[0.06]
+              bg-white/[0.025]
+              p-4
+            "
+          >
+            <p
+              className="
+                text-[10px]
+                uppercase
+                tracking-[0.15em]
+                text-white/20
+              "
+            >
+              Development Account
+            </p>
+
+            <p
+              className="
+                mt-3
+                text-xs
+                text-white/40
+              "
+            >
+              investigator@tracex.local
+            </p>
+
+            <p
+              className="
+                mt-1
+                text-xs
+                text-white/40
+              "
+            >
+              TraceX@2026!
+            </p>
+          </div>
         </motion.div>
       </div>
     </main>
+  )
+}
+
+/* =========================================================
+   ACCESS / PERMISSION UI
+========================================================= */
+
+function ReadOnlyBadge() {
+  return (
+    <div
+      className="
+        flex
+        h-12
+        items-center
+        gap-2
+        rounded-2xl
+        border
+        border-white/10
+        bg-white/[0.04]
+        px-4
+        text-xs
+        text-white/35
+      "
+    >
+      <ShieldCheck
+        size={14}
+      />
+
+      Read-only access
+    </div>
+  )
+}
+
+function PermissionNotice({
+  message,
+}: {
+  message: string
+}) {
+  return (
+    <div
+      className="
+        mt-5
+        rounded-[20px]
+        border
+        border-amber-400/10
+        bg-amber-400/[0.04]
+        p-4
+      "
+    >
+      <div
+        className="
+          flex
+          items-start
+          gap-3
+        "
+      >
+        <ShieldAlert
+          size={16}
+          className="
+            mt-0.5
+            shrink-0
+            text-amber-300
+          "
+        />
+
+        <p
+          className="
+            text-xs
+            leading-5
+            text-amber-100/60
+          "
+        >
+          {message}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function AccessRestricted({
+  role,
+  description,
+}: {
+  role: UserRole
+  description: string
+}) {
+  return (
+    <div
+      className="
+        glass
+        flex
+        min-h-[420px]
+        items-center
+        justify-center
+        rounded-[30px]
+        p-8
+        text-center
+      "
+    >
+      <div
+        className="
+          max-w-md
+        "
+      >
+        <ShieldAlert
+          size={34}
+          className="
+            mx-auto
+            text-amber-300/60
+          "
+        />
+
+        <h3
+          className="
+            mt-5
+            text-xl
+            font-medium
+          "
+        >
+          Permission Required
+        </h3>
+
+        <p
+          className="
+            mt-3
+            text-sm
+            leading-6
+            text-white/30
+          "
+        >
+          {description}
+        </p>
+
+        <p
+          className="
+            mt-4
+            text-xs
+            text-white/20
+          "
+        >
+          Current role:{" "}
+          {role}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function SuccessPanel({
+  message,
+}: {
+  message: string
+}) {
+  return (
+    <div
+      className="
+        mt-4
+        flex
+        items-start
+        gap-3
+        rounded-[18px]
+        border
+        border-emerald-400/15
+        bg-emerald-400/[0.05]
+        p-3
+      "
+    >
+      <CheckCircle2
+        size={16}
+        className="
+          mt-0.5
+          shrink-0
+          text-emerald-300
+        "
+      />
+
+      <p
+        className="
+          text-xs
+          leading-5
+          text-emerald-200/70
+        "
+      >
+        {message}
+      </p>
+    </div>
   )
 }
 
@@ -8643,6 +9596,7 @@ function ModalHeader({
 }: {
   title: string
   description: string
+
   onClose:
     () => void
 }) {
@@ -8930,6 +9884,16 @@ function AmbientBackground() {
 }
 
 /* =========================================================
+   AUTH TOKEN
+========================================================= */
+
+function getAuthToken() {
+  return sessionStorage.getItem(
+    AUTH_TOKEN_KEY,
+  )
+}
+
+/* =========================================================
    API HELPER
 ========================================================= */
 
@@ -8942,6 +9906,21 @@ async function requestJson<T>(
     new Headers(
       options.headers,
     )
+
+  const token =
+    getAuthToken()
+
+  if (
+    token &&
+    !headers.has(
+      "Authorization",
+    )
+  ) {
+    headers.set(
+      "Authorization",
+      `Bearer ${token}`,
+    )
+  }
 
   const isFormData =
     options.body instanceof
@@ -8990,6 +9969,24 @@ async function requestJson<T>(
   }
 
   if (
+    response.status ===
+      401 &&
+    path !==
+      "/api/auth/login"
+  ) {
+    sessionStorage
+      .removeItem(
+        AUTH_TOKEN_KEY,
+      )
+
+    window.dispatchEvent(
+      new Event(
+        "tracex-auth-expired",
+      ),
+    )
+  }
+
+  if (
     !response.ok
   ) {
     const apiError =
@@ -9007,6 +10004,10 @@ async function requestJson<T>(
   return data as T
 }
 
+/* =========================================================
+   GENERAL HELPERS
+========================================================= */
+
 function getErrorMessage(
   error: unknown,
 ) {
@@ -9019,10 +10020,6 @@ function getErrorMessage(
 
   return "An unexpected TRACE-X error occurred."
 }
-
-/* =========================================================
-   HELPERS
-========================================================= */
 
 async function calculateSHA256(
   file: File,
@@ -9224,24 +10221,35 @@ function formatAction(
     .toLowerCase()
     .replace(
       /(^|\s)\S/g,
-      (character) =>
+      (
+        character,
+      ) =>
         character.toUpperCase(),
     )
 }
 
 function formatAuditEvent(
-  eventType: string,
+  eventType:
+    string,
 ) {
   return eventType
-    .split("_")
+    .split(
+      "_",
+    )
     .map(
       (word) =>
-        word.charAt(0) +
+        word.charAt(
+          0,
+        ) +
         word
-          .slice(1)
+          .slice(
+            1,
+          )
           .toLowerCase(),
     )
-    .join(" ")
+    .join(
+      " ",
+    )
 }
 
 /* =========================================================

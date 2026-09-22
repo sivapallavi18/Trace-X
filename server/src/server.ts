@@ -37,6 +37,14 @@ import {
 } from "./blockchain"
 
 import {
+  authRouter,
+  getAuthContext,
+  initializeAuthentication,
+  requireAuth,
+  requireRoles,
+} from "./auth"
+
+import {
   database,
   initializeDatabase,
   testDatabaseConnection,
@@ -409,6 +417,15 @@ app.use(
     limit:
       "10mb",
   }),
+)
+
+/*
+ * Authentication endpoints must stay public so a user can
+ * obtain a JWT before accessing protected TRACE-X routes.
+ */
+app.use(
+  "/api/auth",
+  authRouter,
 )
 
 /* =========================================================
@@ -788,11 +805,6 @@ function calculateCustodyDigest(
     occurredAt: string
   },
 ) {
-  /*
-   * Canonical JSON object.
-   *
-   * We hash the same explicitly ordered fields every time.
-   */
   const canonical =
     JSON.stringify({
       schema:
@@ -1819,8 +1831,7 @@ async function ensureRegistrationCustodyEvent(
 
           DO NOTHING
 
-          RETURNING
-            id
+          RETURNING id
         `,
         [
           evidenceId,
@@ -1944,7 +1955,7 @@ async function ensureRegistrationCustodyEvent(
 }
 
 /* =========================================================
-   ROOT
+   PUBLIC ROOT
 ========================================================= */
 
 app.get(
@@ -1966,6 +1977,9 @@ app.get(
       status:
         "running",
 
+      authentication:
+        "JWT + RBAC",
+
       database:
         "PostgreSQL",
 
@@ -1982,7 +1996,7 @@ app.get(
 )
 
 /* =========================================================
-   HEALTH
+   PUBLIC HEALTH CHECK
 ========================================================= */
 
 app.get(
@@ -2058,6 +2072,17 @@ app.get(
             ? "healthy"
             : "degraded",
 
+        authentication: {
+          enabled:
+            true,
+
+          type:
+            "JWT",
+
+          authorization:
+            "RBAC",
+        },
+
         database: {
           connected:
             true,
@@ -2114,6 +2139,15 @@ app.get(
         })
     }
   },
+)
+
+/* =========================================================
+   PROTECT REMAINING /api ROUTES
+========================================================= */
+
+app.use(
+  "/api",
+  requireAuth,
 )
 
 /* =========================================================
@@ -2203,6 +2237,13 @@ app.get(
 
 app.post(
   "/api/cases",
+
+  requireRoles(
+    "Investigator",
+    "Supervisor",
+    "Admin",
+  ),
+
   async (
     request:
       Request,
@@ -2300,6 +2341,35 @@ app.post(
             selectedPriority,
           ],
         )
+
+      const auth =
+        getAuthContext(
+          request,
+        )
+
+      await appendAuditLog({
+        eventType:
+          "CASE_CREATED",
+
+        evidenceId:
+          null,
+
+        caseId:
+          insertResult
+            .rows[0]
+            .id,
+
+        actor:
+          auth.name,
+
+        details: {
+          title:
+            title.trim(),
+
+          role:
+            auth.role,
+        },
+      })
 
       const newCase =
         await fetchCaseById(
@@ -2420,6 +2490,14 @@ app.get(
 
 app.post(
   "/api/evidence",
+
+  requireRoles(
+    "Investigator",
+    "Forensic Analyst",
+    "Supervisor",
+    "Admin",
+  ),
+
   async (
     request:
       Request,
@@ -2704,6 +2782,13 @@ app.post(
 app.post(
   "/api/evidence/upload",
 
+  requireRoles(
+    "Investigator",
+    "Forensic Analyst",
+    "Supervisor",
+    "Admin",
+  ),
+
   upload.single(
     "file",
   ),
@@ -2975,6 +3060,40 @@ app.post(
           )
       }
 
+      const auth =
+        getAuthContext(
+          request,
+        )
+
+      await appendAuditLog({
+        eventType:
+          "EVIDENCE_UPLOAD_COMPLETED",
+
+        evidenceId,
+
+        caseId,
+
+        actor:
+          auth.name,
+
+        details: {
+          role:
+            auth.role,
+
+          fileName:
+            uploadedFile.originalname,
+
+          size:
+            uploadedFile.size,
+
+          sha256:
+            calculatedHash,
+
+          blockchainAnchored:
+            blockchainResult.anchored,
+        },
+      })
+
       const newEvidence =
         await fetchEvidenceById(
           evidenceId,
@@ -3034,6 +3153,11 @@ app.post(
 
 app.post(
   "/api/evidence/:id/anchor",
+
+  requireRoles(
+    "Supervisor",
+    "Admin",
+  ),
 
   async (
     request:
@@ -3210,6 +3334,14 @@ app.post(
 
 app.post(
   "/api/evidence/:id/verify",
+
+  requireRoles(
+    "Investigator",
+    "Forensic Analyst",
+    "Supervisor",
+    "Reviewer",
+    "Admin",
+  ),
 
   async (
     request:
@@ -3437,6 +3569,38 @@ app.post(
         }
       }
 
+      const auth =
+        getAuthContext(
+          request,
+        )
+
+      await appendAuditLog({
+        eventType:
+          "EVIDENCE_VERIFIED",
+
+        evidenceId:
+          record.id,
+
+        caseId:
+          record.case_id,
+
+        actor:
+          auth.name,
+
+        details: {
+          role:
+            auth.role,
+
+          fileMatchesDatabase,
+
+          blockchainChecked,
+
+          databaseHashVerified,
+
+          currentFileHashVerified,
+        },
+      })
+
       response.json({
         success:
           true,
@@ -3596,6 +3760,13 @@ app.get(
 app.post(
   "/api/evidence/:id/transfer",
 
+  requireRoles(
+    "Investigator",
+    "Forensic Analyst",
+    "Supervisor",
+    "Admin",
+  ),
+
   async (
     request:
       Request<{
@@ -3648,10 +3819,6 @@ app.post(
         return
       }
 
-      /*
-       * Every blockchain-backed custody chain should begin
-       * with the initial registration event.
-       */
       const registration =
         await ensureRegistrationCustodyEvent(
           request.params.id,
@@ -3678,10 +3845,6 @@ app.post(
         return
       }
 
-      /*
-       * Don't allow new custody events to jump past a failed
-       * earlier event.
-       */
       const unresolvedResult =
         await database.query<{
           count: string
@@ -3926,8 +4089,7 @@ app.post(
                 $8
               )
 
-              RETURNING
-                id
+              RETURNING id
             `,
             [
               request.params.id,
@@ -3965,6 +4127,11 @@ app.post(
           ],
         )
 
+        const auth =
+          getAuthContext(
+            request,
+          )
+
         await client.query(
           `
             INSERT INTO audit_logs (
@@ -3986,7 +4153,7 @@ app.post(
           [
             request.params.id,
             caseId,
-            fromCustodian,
+            auth.name,
             JSON.stringify({
               custodyEventId,
 
@@ -4002,6 +4169,9 @@ app.post(
                 transferReason,
 
               eventDigest,
+
+              authenticatedRole:
+                auth.role,
             }),
           ],
         )
@@ -4023,10 +4193,6 @@ app.post(
         client.release()
       }
 
-      /*
-       * The operational transfer has already been recorded.
-       * Blockchain anchoring happens after PostgreSQL commit.
-       */
       const blockchainResult =
         await anchorAndPersistCustodyEvent(
           custodyEventId,
@@ -4083,6 +4249,11 @@ app.post(
 
 app.post(
   "/api/custody/:id/anchor",
+
+  requireRoles(
+    "Supervisor",
+    "Admin",
+  ),
 
   async (
     request:
@@ -4270,6 +4441,12 @@ app.post(
 app.get(
   "/api/audit",
 
+  requireRoles(
+    "Supervisor",
+    "Reviewer",
+    "Admin",
+  ),
+
   async (
     request:
       Request,
@@ -4351,19 +4528,44 @@ app.get(
 
 app.get(
   "/api",
+
   (
-    _request:
+    request:
       Request,
 
     response:
       Response,
   ) => {
+    const auth =
+      getAuthContext(
+        request,
+      )
+
     response.json({
       application:
         "TRACE-X",
 
       version:
-        "0.6.0",
+        "0.7.0",
+
+      authentication: {
+        type:
+          "JWT",
+
+        authorization:
+          "Role-Based Access Control",
+
+        currentUser: {
+          name:
+            auth.name,
+
+          email:
+            auth.email,
+
+          role:
+            auth.role,
+        },
+      },
 
       database:
         "PostgreSQL",
@@ -4378,6 +4580,12 @@ app.get(
         "Blockchain-anchored chain of custody",
 
       endpoints: {
+        login:
+          "POST /api/auth/login",
+
+        currentUser:
+          "GET /api/auth/me",
+
         health:
           "GET /api/health",
 
@@ -4561,6 +4769,20 @@ async function startServer() {
       "Append-only audit log: READY",
     )
 
+    console.log(
+      "Creating/checking authentication users...",
+    )
+
+    await initializeAuthentication()
+
+    console.log(
+      "Authentication: READY",
+    )
+
+    console.log(
+      "RBAC: ENABLED",
+    )
+
     await ensureEvidenceStorage()
 
     console.log(
@@ -4614,12 +4836,60 @@ async function startServer() {
         )
 
         console.log(
+          "Authentication: JWT",
+        )
+
+        console.log(
+          "Authorization: RBAC",
+        )
+
+        console.log(
           "Chain of custody: ENABLED",
         )
 
         console.log(
           "Blockchain anchoring: ENABLED",
         )
+
+        if (
+          (
+            process.env.NODE_ENV ||
+            "development"
+          ) !==
+          "production"
+        ) {
+          console.log(
+            "--------------------------------------",
+          )
+
+          console.log(
+            "Development accounts:",
+          )
+
+          console.log(
+            "investigator@tracex.local",
+          )
+
+          console.log(
+            "analyst@tracex.local",
+          )
+
+          console.log(
+            "supervisor@tracex.local",
+          )
+
+          console.log(
+            "reviewer@tracex.local",
+          )
+
+          console.log(
+            "admin@tracex.local",
+          )
+
+          console.log(
+            "Development password: TraceX@2026!",
+          )
+        }
 
         console.log(
           "======================================",
