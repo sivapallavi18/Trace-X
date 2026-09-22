@@ -112,7 +112,7 @@ export async function initializeDatabase() {
     `)
 
     /* -----------------------------------------------------
-       CASES TABLE
+       CASES
     ----------------------------------------------------- */
 
     await client.query(`
@@ -167,7 +167,7 @@ export async function initializeDatabase() {
     `)
 
     /* -----------------------------------------------------
-       EVIDENCE TABLE
+       EVIDENCE
     ----------------------------------------------------- */
 
     await client.query(`
@@ -245,6 +245,21 @@ export async function initializeDatabase() {
 
         mime_type TEXT,
 
+        blockchain_status TEXT NOT NULL
+          DEFAULT 'Not Anchored',
+
+        blockchain_version INTEGER,
+
+        blockchain_tx_hash TEXT,
+
+        blockchain_block_number BIGINT,
+
+        blockchain_contract_address TEXT,
+
+        blockchain_evidence_key TEXT,
+
+        blockchain_error TEXT,
+
         created_at TIMESTAMPTZ
           NOT NULL
           DEFAULT NOW(),
@@ -256,10 +271,7 @@ export async function initializeDatabase() {
     `)
 
     /* -----------------------------------------------------
-       MIGRATE OLDER DATABASES
-
-       These statements make this safe if your evidence table
-       was created in the previous step.
+       MIGRATE OLDER TRACE-X DATABASES
     ----------------------------------------------------- */
 
     await client.query(`
@@ -277,6 +289,108 @@ export async function initializeDatabase() {
     await client.query(`
       ALTER TABLE evidence
       ADD COLUMN IF NOT EXISTS mime_type TEXT
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_status TEXT
+      NOT NULL
+      DEFAULT 'Not Anchored'
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_version INTEGER
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_tx_hash TEXT
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_block_number BIGINT
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_contract_address TEXT
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_evidence_key TEXT
+    `)
+
+    await client.query(`
+      ALTER TABLE evidence
+      ADD COLUMN IF NOT EXISTS blockchain_error TEXT
+    `)
+
+    /* -----------------------------------------------------
+       BLOCKCHAIN CONSTRAINTS
+    ----------------------------------------------------- */
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'evidence_blockchain_status_check'
+        ) THEN
+          ALTER TABLE evidence
+          ADD CONSTRAINT evidence_blockchain_status_check
+          CHECK (
+            blockchain_status IN (
+              'Not Anchored',
+              'Pending',
+              'Anchored',
+              'Failed'
+            )
+          );
+        END IF;
+      END
+      $$;
+    `)
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'evidence_blockchain_version_check'
+        ) THEN
+          ALTER TABLE evidence
+          ADD CONSTRAINT evidence_blockchain_version_check
+          CHECK (
+            blockchain_version IS NULL
+            OR blockchain_version > 0
+          );
+        END IF;
+      END
+      $$;
+    `)
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'evidence_blockchain_block_number_check'
+        ) THEN
+          ALTER TABLE evidence
+          ADD CONSTRAINT evidence_blockchain_block_number_check
+          CHECK (
+            blockchain_block_number IS NULL
+            OR blockchain_block_number >= 0
+          );
+        END IF;
+      END
+      $$;
     `)
 
     /* -----------------------------------------------------
@@ -339,10 +453,21 @@ export async function initializeDatabase() {
       WHERE storage_key IS NOT NULL
     `)
 
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_evidence_blockchain_status
+      ON evidence(blockchain_status)
+    `)
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_evidence_blockchain_tx_hash
+      ON evidence(blockchain_tx_hash)
+      WHERE blockchain_tx_hash IS NOT NULL
+    `)
+
     /* -----------------------------------------------------
        INITIAL SEED DATA
 
-       Only seed a completely empty database.
+       Only inserted for a completely empty database.
     ----------------------------------------------------- */
 
     const caseCountResult =
@@ -381,10 +506,6 @@ export async function initializeDatabase() {
       caseCount === 0 &&
       evidenceCount === 0
     ) {
-      /* ---------------------------------------------------
-         SEED CASES
-      --------------------------------------------------- */
-
       await client.query(`
         INSERT INTO cases (
           id,
@@ -439,13 +560,6 @@ export async function initializeDatabase() {
         )
       `)
 
-      /* ---------------------------------------------------
-         SEED EVIDENCE
-
-         These are metadata-only example records, so they do
-         not have storage_key values.
-      --------------------------------------------------- */
-
       await client.query(`
         INSERT INTO evidence (
           id,
@@ -459,6 +573,7 @@ export async function initializeDatabase() {
           integrity,
           status,
           storage_provider,
+          blockchain_status,
           created_at,
           updated_at
         )
@@ -475,6 +590,7 @@ export async function initializeDatabase() {
           'Verified',
           'Sealed',
           'metadata-only',
+          'Not Anchored',
           NOW() - INTERVAL '2 days',
           NOW() - INTERVAL '20 minutes'
         ),
@@ -490,6 +606,7 @@ export async function initializeDatabase() {
           'Verified',
           'Registered',
           'metadata-only',
+          'Not Anchored',
           NOW() - INTERVAL '3 days',
           NOW() - INTERVAL '1 hour'
         ),
@@ -505,14 +622,11 @@ export async function initializeDatabase() {
           'Pending',
           'Registered',
           'metadata-only',
+          'Not Anchored',
           NOW() - INTERVAL '5 days',
           NOW() - INTERVAL '2 hours'
         )
       `)
-
-      /* ---------------------------------------------------
-         SEED VERSION HISTORY
-      --------------------------------------------------- */
 
       await client.query(`
         INSERT INTO evidence_versions (

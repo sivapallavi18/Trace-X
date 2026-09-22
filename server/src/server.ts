@@ -30,6 +30,12 @@ import {
 } from "node:path"
 
 import {
+  anchorEvidenceOnBlockchain,
+  getBlockchainStatus,
+  verifyEvidenceOnBlockchain,
+} from "./blockchain"
+
+import {
   database,
   initializeDatabase,
   testDatabaseConnection,
@@ -55,13 +61,6 @@ const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN ||
   "http://localhost:5173"
 
-/*
- * For this student/local-development version we allow files
- * up to 1 GB.
- *
- * Multer writes directly to disk, so the whole upload is not
- * held in RAM.
- */
 const MAX_EVIDENCE_FILE_SIZE =
   1024 *
   1024 *
@@ -128,12 +127,8 @@ type CaseRow = {
   status: CaseStatus
   priority: CasePriority
   evidence_count: number
-  created_at:
-    | Date
-    | string
-  updated_at:
-    | Date
-    | string
+  created_at: Date | string
+  updated_at: Date | string
 }
 
 type EvidenceIntegrity =
@@ -154,6 +149,12 @@ type EvidenceType =
   | "Image"
   | "Video"
   | "Other"
+
+type BlockchainAnchorStatus =
+  | "Not Anchored"
+  | "Pending"
+  | "Anchored"
+  | "Failed"
 
 type EvidenceVersion = {
   version: number
@@ -177,6 +178,14 @@ type EvidenceRecord = {
   createdAt: string
   updatedAt: string
   versions: EvidenceVersion[]
+
+  blockchainStatus: BlockchainAnchorStatus
+  blockchainVersion: number | null
+  blockchainTransactionHash: string | null
+  blockchainBlockNumber: number | null
+  blockchainContractAddress: string | null
+  blockchainEvidenceKey: string | null
+  blockchainError: string | null
 }
 
 type EvidenceRow = {
@@ -186,31 +195,67 @@ type EvidenceRow = {
   case_id: string
   case_title: string
   type: EvidenceType
-  size:
-    | number
-    | string
+  size: number | string
   hash: string
   custodian: string
   integrity: EvidenceIntegrity
   status: EvidenceStatus
-  created_at:
-    | Date
-    | string
-  updated_at:
-    | Date
-    | string
-  versions:
-    EvidenceVersion[]
+  created_at: Date | string
+  updated_at: Date | string
+  versions: EvidenceVersion[]
+
+  blockchain_status:
+    BlockchainAnchorStatus
+
+  blockchain_version:
+    number | null
+
+  blockchain_tx_hash:
+    string | null
+
+  blockchain_block_number:
+    number | string | null
+
+  blockchain_contract_address:
+    string | null
+
+  blockchain_evidence_key:
+    string | null
+
+  blockchain_error:
+    string | null
 }
 
 type StoredEvidenceRow = {
   id: string
   hash: string
+
   storage_key:
-    | string
-    | null
+    string | null
+
   storage_provider:
     string
+
+  blockchain_status:
+    BlockchainAnchorStatus
+
+  blockchain_version:
+    number | null
+
+  blockchain_tx_hash:
+    string | null
+
+  blockchain_block_number:
+    number | string | null
+
+  blockchain_contract_address:
+    string | null
+
+  blockchain_evidence_key:
+    string | null
+
+  blockchain_error:
+    string | null
 }
 
 /* =========================================================
@@ -237,7 +282,7 @@ const VALID_EVIDENCE_TYPES:
   ]
 
 /* =========================================================
-   MULTER FILE STORAGE
+   MULTER STORAGE
 ========================================================= */
 
 const multerStorage =
@@ -258,12 +303,6 @@ const multerStorage =
       _file,
       callback,
     ) => {
-      /*
-       * Never trust the filename supplied by the user's
-       * computer as a filesystem path.
-       *
-       * TRACE-X generates an opaque storage identifier.
-       */
       callback(
         null,
         randomUUID(),
@@ -307,13 +346,12 @@ app.use(
 )
 
 /* =========================================================
-   HELPERS
+   GENERIC HELPERS
 ========================================================= */
 
 function formatDate(
   value:
-    | Date
-    | string,
+    Date | string,
 ) {
   return new Date(
     value,
@@ -330,6 +368,19 @@ function formatDate(
         "numeric",
     },
   )
+}
+
+function getErrorMessage(
+  error: unknown,
+) {
+  if (
+    error instanceof
+    Error
+  ) {
+    return error.message
+  }
+
+  return "Unknown TRACE-X error."
 }
 
 function mapCase(
@@ -423,14 +474,43 @@ function mapEvidence(
     versions:
       row.versions ||
       [],
+
+    blockchainStatus:
+      row.blockchain_status,
+
+    blockchainVersion:
+      row.blockchain_version ===
+      null
+        ? null
+        : Number(
+            row.blockchain_version,
+          ),
+
+    blockchainTransactionHash:
+      row.blockchain_tx_hash,
+
+    blockchainBlockNumber:
+      row.blockchain_block_number ===
+      null
+        ? null
+        : Number(
+            row.blockchain_block_number,
+          ),
+
+    blockchainContractAddress:
+      row.blockchain_contract_address,
+
+    blockchainEvidenceKey:
+      row.blockchain_evidence_key,
+
+    blockchainError:
+      row.blockchain_error,
   }
 }
 
 function sendServerError(
-  response:
-    Response,
-  error:
-    unknown,
+  response: Response,
+  error: unknown,
 ) {
   console.error(
     "TRACE-X server error:",
@@ -449,10 +529,7 @@ function sendServerError(
 }
 
 /* =========================================================
-   SHA-256 FILE HASHING
-
-   This reads the file as a stream instead of loading the
-   complete file into RAM.
+   SHA-256 STREAMING
 ========================================================= */
 
 function calculateFileSHA256(
@@ -506,16 +583,12 @@ function calculateFileSHA256(
 }
 
 /* =========================================================
-   SAFE STORAGE PATH RESOLUTION
+   STORAGE PATH SAFETY
 ========================================================= */
 
 function resolveStoredEvidencePath(
   storageKey: string,
 ) {
-  /*
-   * A valid local storage key must only be a filename,
-   * never a path such as ../../something.
-   */
   if (
     basename(
       storageKey,
@@ -555,10 +628,6 @@ function resolveStoredEvidencePath(
   return resolvedPath
 }
 
-/* =========================================================
-   CLEANUP
-========================================================= */
-
 async function removeFileSafely(
   filePath: string,
 ) {
@@ -576,7 +645,7 @@ async function removeFileSafely(
       "ENOENT"
     ) {
       console.error(
-        "Could not remove temporary evidence file:",
+        "Could not remove evidence file:",
         error,
       )
     }
@@ -673,64 +742,76 @@ async function fetchCaseById(
   )
 }
 
+const EVIDENCE_SELECT = `
+  SELECT
+    e.id,
+    e.name,
+    e.description,
+    e.case_id,
+
+    c.title
+      AS case_title,
+
+    e.type,
+    e.size,
+    e.hash,
+    e.custodian,
+    e.integrity,
+    e.status,
+    e.created_at,
+    e.updated_at,
+
+    e.blockchain_status,
+    e.blockchain_version,
+    e.blockchain_tx_hash,
+    e.blockchain_block_number,
+    e.blockchain_contract_address,
+    e.blockchain_evidence_key,
+    e.blockchain_error,
+
+    COALESCE(
+      JSONB_AGG(
+        JSONB_BUILD_OBJECT(
+          'version',
+          v.version,
+
+          'hash',
+          v.hash,
+
+          'createdAt',
+          TO_CHAR(
+            v.created_at,
+            'DD Mon YYYY'
+          ),
+
+          'note',
+          v.note
+        )
+
+        ORDER BY
+          v.version
+      )
+      FILTER (
+        WHERE
+          v.id IS NOT NULL
+      ),
+
+      '[]'::JSONB
+    ) AS versions
+
+  FROM evidence e
+
+  INNER JOIN cases c
+    ON c.id = e.case_id
+
+  LEFT JOIN evidence_versions v
+    ON v.evidence_id = e.id
+`
+
 async function fetchAllEvidence() {
   const result =
     await database.query<EvidenceRow>(`
-      SELECT
-        e.id,
-        e.name,
-        e.description,
-        e.case_id,
-
-        c.title
-          AS case_title,
-
-        e.type,
-        e.size,
-        e.hash,
-        e.custodian,
-        e.integrity,
-        e.status,
-        e.created_at,
-        e.updated_at,
-
-        COALESCE(
-          JSONB_AGG(
-            JSONB_BUILD_OBJECT(
-              'version',
-              v.version,
-
-              'hash',
-              v.hash,
-
-              'createdAt',
-              TO_CHAR(
-                v.created_at,
-                'DD Mon YYYY'
-              ),
-
-              'note',
-              v.note
-            )
-
-            ORDER BY
-              v.version
-          )
-          FILTER (
-            WHERE
-              v.id IS NOT NULL
-          ),
-
-          '[]'::JSONB
-        ) AS versions
-
-      FROM evidence e
-
-      INNER JOIN cases c
-        ON c.id = e.case_id
-
-      LEFT JOIN evidence_versions v
-        ON v.evidence_id = e.id
+      ${EVIDENCE_SELECT}
 
       GROUP BY
         e.id,
@@ -751,61 +832,7 @@ async function fetchEvidenceById(
   const result =
     await database.query<EvidenceRow>(
       `
-        SELECT
-          e.id,
-          e.name,
-          e.description,
-          e.case_id,
-
-          c.title
-            AS case_title,
-
-          e.type,
-          e.size,
-          e.hash,
-          e.custodian,
-          e.integrity,
-          e.status,
-          e.created_at,
-          e.updated_at,
-
-          COALESCE(
-            JSONB_AGG(
-              JSONB_BUILD_OBJECT(
-                'version',
-                v.version,
-
-                'hash',
-                v.hash,
-
-                'createdAt',
-                TO_CHAR(
-                  v.created_at,
-                  'DD Mon YYYY'
-                ),
-
-                'note',
-                v.note
-              )
-
-              ORDER BY
-                v.version
-            )
-            FILTER (
-              WHERE
-                v.id IS NOT NULL
-            ),
-
-            '[]'::JSONB
-          ) AS versions
-
-        FROM evidence e
-
-        INNER JOIN cases c
-          ON c.id = e.case_id
-
-        LEFT JOIN evidence_versions v
-          ON v.evidence_id = e.id
+        ${EVIDENCE_SELECT}
 
         WHERE
           e.id = $1
@@ -829,6 +856,119 @@ async function fetchEvidenceById(
   return mapEvidence(
     result.rows[0],
   )
+}
+
+/* =========================================================
+   BLOCKCHAIN PERSISTENCE
+========================================================= */
+
+async function anchorAndPersistEvidence(
+  evidenceId: string,
+  sha256Hash: string,
+) {
+  await database.query(
+    `
+      UPDATE evidence
+
+      SET
+        blockchain_status = 'Pending',
+        blockchain_error = NULL,
+        updated_at = NOW()
+
+      WHERE
+        id = $1
+    `,
+    [
+      evidenceId,
+    ],
+  )
+
+  try {
+    const anchor =
+      await anchorEvidenceOnBlockchain(
+        evidenceId,
+        sha256Hash,
+      )
+
+    await database.query(
+      `
+        UPDATE evidence
+
+        SET
+          blockchain_status = 'Anchored',
+
+          blockchain_version = $1,
+
+          blockchain_tx_hash = $2,
+
+          blockchain_block_number = $3,
+
+          blockchain_contract_address = $4,
+
+          blockchain_evidence_key = $5,
+
+          blockchain_error = NULL,
+
+          updated_at = NOW()
+
+        WHERE
+          id = $6
+      `,
+      [
+        anchor.version,
+        anchor.transactionHash,
+        anchor.blockNumber,
+        anchor.contractAddress,
+        anchor.evidenceKey,
+        evidenceId,
+      ],
+    )
+
+    return {
+      anchored:
+        true as const,
+
+      anchor,
+    }
+  } catch (error) {
+    const message =
+      getErrorMessage(
+        error,
+      )
+
+    console.error(
+      `Blockchain anchoring failed for ${evidenceId}:`,
+      error,
+    )
+
+    await database.query(
+      `
+        UPDATE evidence
+
+        SET
+          blockchain_status = 'Failed',
+
+          blockchain_error = $1,
+
+          updated_at = NOW()
+
+        WHERE
+          id = $2
+      `,
+      [
+        message,
+        evidenceId,
+      ],
+    )
+
+    return {
+      anchored:
+        false as const,
+
+      error:
+        message,
+    }
+  }
 }
 
 /* =========================================================
@@ -859,6 +999,9 @@ app.get(
 
       evidenceStorage:
         "Local off-chain storage",
+
+      blockchain:
+        "Ethereum-compatible Hardhat network",
     })
   },
 )
@@ -884,47 +1027,93 @@ app.get(
         EVIDENCE_STORAGE_DIRECTORY,
       )
 
-      response
-        .status(200)
-        .json({
-          success:
+      let blockchain:
+        Record<
+          string,
+          unknown
+        >
+
+      try {
+        const blockchainStatus =
+          await getBlockchainStatus()
+
+        blockchain = {
+          connected:
             true,
 
-          service:
-            "TRACE-X API",
+          chainId:
+            blockchainStatus.chainId,
 
-          status:
-            "healthy",
+          blockNumber:
+            blockchainStatus.blockNumber,
 
-          database: {
-            connected:
-              true,
+          contractAddress:
+            blockchainStatus.contractAddress,
 
-            name:
-              databaseInfo.database_name,
+          contractDeployed:
+            blockchainStatus.contractDeployed,
 
-            user:
-              databaseInfo.database_user,
+          writerAddress:
+            blockchainStatus.writerAddress,
 
-            serverTime:
-              databaseInfo.server_time,
-          },
+          writerAuthorized:
+            blockchainStatus.writerAuthorized,
+        }
+      } catch (error) {
+        blockchain = {
+          connected:
+            false,
 
-          storage: {
-            provider:
-              "local",
+          error:
+            getErrorMessage(
+              error,
+            ),
+        }
+      }
 
-            ready:
-              true,
-          },
+      response.json({
+        success:
+          true,
 
-          timestamp:
-            new Date().toISOString(),
+        service:
+          "TRACE-X API",
 
-          environment:
-            process.env.NODE_ENV ||
-            "development",
-        })
+        status:
+          blockchain.connected
+            ? "healthy"
+            : "degraded",
+
+        database: {
+          connected:
+            true,
+
+          name:
+            databaseInfo.database_name,
+
+          user:
+            databaseInfo.database_user,
+
+          serverTime:
+            databaseInfo.server_time,
+        },
+
+        storage: {
+          provider:
+            "local",
+
+          ready:
+            true,
+        },
+
+        blockchain,
+
+        timestamp:
+          new Date().toISOString(),
+
+        environment:
+          process.env.NODE_ENV ||
+          "development",
+      })
     } catch (error) {
       console.error(
         "TRACE-X health check failed:",
@@ -990,7 +1179,9 @@ app.get(
   "/api/cases/:id",
   async (
     request:
-      Request,
+      Request<{
+        id: string
+      }>,
 
     response:
       Response,
@@ -1163,7 +1354,7 @@ app.post(
 )
 
 /* =========================================================
-   EVIDENCE ROUTES
+   EVIDENCE READ ROUTES
 ========================================================= */
 
 app.get(
@@ -1202,7 +1393,9 @@ app.get(
   "/api/evidence/:id",
   async (
     request:
-      Request,
+      Request<{
+        id: string
+      }>,
 
     response:
       Response,
@@ -1213,7 +1406,9 @@ app.get(
           request.params.id,
         )
 
-      if (!evidence) {
+      if (
+        !evidence
+      ) {
         response
           .status(404)
           .json({
@@ -1244,10 +1439,7 @@ app.get(
 )
 
 /* =========================================================
-   LEGACY METADATA-ONLY EVIDENCE REGISTRATION
-
-   We keep this temporarily so your existing React frontend
-   continues to work before we change it to real file upload.
+   LEGACY METADATA-ONLY REGISTRATION
 ========================================================= */
 
 app.post(
@@ -1349,15 +1541,11 @@ app.post(
       }
 
       const caseResult =
-        await client.query<{
-          id: string
-        }>(
+        await client.query(
           `
-            SELECT
-              id
+            SELECT id
             FROM cases
-            WHERE
-              id = $1
+            WHERE id = $1
           `,
           [
             caseId,
@@ -1418,7 +1606,8 @@ app.post(
               custodian,
               integrity,
               status,
-              storage_provider
+              storage_provider,
+              blockchain_status
             )
 
             VALUES (
@@ -1429,13 +1618,13 @@ app.post(
               $5,
               $6,
               $7,
-              'Verified',
+              'Pending',
               'Registered',
-              'metadata-only'
+              'metadata-only',
+              'Not Anchored'
             )
 
-            RETURNING
-              id
+            RETURNING id
           `,
           [
             name.trim(),
@@ -1447,13 +1636,9 @@ app.post(
               : "No evidence description has been provided.",
 
             caseId,
-
             selectedType,
-
             selectedSize,
-
             normalizedHash,
-
             custodian.trim(),
           ],
         )
@@ -1476,7 +1661,7 @@ app.post(
             $1,
             1,
             $2,
-            'Original evidence acquisition'
+            'Client-submitted metadata-only evidence record'
           )
         `,
         [
@@ -1488,12 +1673,8 @@ app.post(
       await client.query(
         `
           UPDATE cases
-
-          SET
-            updated_at = NOW()
-
-          WHERE
-            id = $1
+          SET updated_at = NOW()
+          WHERE id = $1
         `,
         [
           caseId,
@@ -1516,7 +1697,7 @@ app.post(
             true,
 
           message:
-            "Evidence metadata registered successfully.",
+            "Metadata-only evidence registered. It has not been independently hashed or blockchain anchored.",
 
           data:
             newEvidence,
@@ -1527,7 +1708,7 @@ app.post(
           "ROLLBACK",
         )
       } catch {
-        // Ignore rollback errors.
+        // Ignore rollback failure.
       }
 
       sendServerError(
@@ -1541,15 +1722,7 @@ app.post(
 )
 
 /* =========================================================
-   REAL FILE UPLOAD
-
-   multipart/form-data fields:
-
-   file
-   caseId
-   description
-   type
-   custodian
+   REAL FILE UPLOAD + AUTOMATIC BLOCKCHAIN ANCHOR
 ========================================================= */
 
 app.post(
@@ -1642,17 +1815,11 @@ app.post(
             : "Other"
 
       const caseResult =
-        await database.query<{
-          id: string
-        }>(
+        await database.query(
           `
-            SELECT
-              id
-
+            SELECT id
             FROM cases
-
-            WHERE
-              id = $1
+            WHERE id = $1
           `,
           [
             caseId,
@@ -1676,20 +1843,21 @@ app.post(
         return
       }
 
-      /*
-       * This hash is calculated by the backend from the
-       * exact bytes that were written to off-chain storage.
-       */
+      /* ---------------------------------------------------
+         AUTHORITATIVE SERVER SHA-256
+      --------------------------------------------------- */
+
       const calculatedHash =
         await calculateFileSHA256(
           uploadedFile.path,
         )
 
+      /* ---------------------------------------------------
+         POSTGRESQL TRANSACTION
+      --------------------------------------------------- */
+
       const client =
         await database.connect()
-
-      let databaseCommitted =
-        false
 
       let evidenceId =
         ""
@@ -1716,7 +1884,8 @@ app.post(
                 status,
                 storage_key,
                 storage_provider,
-                mime_type
+                mime_type,
+                blockchain_status
               )
 
               VALUES (
@@ -1731,11 +1900,11 @@ app.post(
                 'Registered',
                 $8,
                 'local',
-                $9
+                $9,
+                'Pending'
               )
 
-              RETURNING
-                id
+              RETURNING id
             `,
             [
               uploadedFile.originalname,
@@ -1747,17 +1916,11 @@ app.post(
                 : "No evidence description has been provided.",
 
               caseId,
-
               selectedType,
-
               uploadedFile.size,
-
               calculatedHash,
-
               custodian.trim(),
-
               uploadedFile.filename,
-
               uploadedFile.mimetype ||
                 null,
             ],
@@ -1781,7 +1944,7 @@ app.post(
               $1,
               1,
               $2,
-              'Original evidence acquisition'
+              'Original evidence acquisition - server SHA-256'
             )
           `,
           [
@@ -1809,9 +1972,6 @@ app.post(
           "COMMIT",
         )
 
-        databaseCommitted =
-          true
-
         preserveUploadedFile =
           true
       } catch (error) {
@@ -1820,7 +1980,7 @@ app.post(
             "ROLLBACK",
           )
         } catch {
-          // Ignore rollback errors.
+          // Ignore rollback failure.
         }
 
         throw error
@@ -1828,13 +1988,15 @@ app.post(
         client.release()
       }
 
-      if (
-        !databaseCommitted
-      ) {
-        throw new Error(
-          "Evidence transaction was not committed.",
+      /* ---------------------------------------------------
+         BLOCKCHAIN ANCHOR
+      --------------------------------------------------- */
+
+      const blockchainResult =
+        await anchorAndPersistEvidence(
+          evidenceId,
+          calculatedHash,
         )
-      }
 
       const newEvidence =
         await fetchEvidenceById(
@@ -1848,13 +2010,23 @@ app.post(
             true,
 
           message:
-            "Evidence file stored and registered successfully.",
+            blockchainResult.anchored
+              ? "Evidence stored, hashed and blockchain anchored successfully."
+              : "Evidence stored and hashed successfully, but blockchain anchoring failed. The anchor can be retried.",
 
           hashSource:
             "server",
 
           storageProvider:
             "local",
+
+          blockchainAnchored:
+            blockchainResult.anchored,
+
+          blockchainError:
+            blockchainResult.anchored
+              ? null
+              : blockchainResult.error,
 
           data:
             newEvidence,
@@ -1878,10 +2050,169 @@ app.post(
 )
 
 /* =========================================================
-   VERIFY STORED EVIDENCE
+   RETRY BLOCKCHAIN ANCHOR
+========================================================= */
 
-   Recalculates SHA-256 from the currently stored bytes and
-   compares it with the original SHA-256 recorded in the DB.
+app.post(
+  "/api/evidence/:id/anchor",
+
+  async (
+    request:
+      Request<{
+        id: string
+      }>,
+
+    response:
+      Response,
+  ) => {
+    try {
+      const result =
+        await database.query<StoredEvidenceRow>(
+          `
+            SELECT
+              id,
+              hash,
+              storage_key,
+              storage_provider,
+              blockchain_status,
+              blockchain_version,
+              blockchain_tx_hash,
+              blockchain_block_number,
+              blockchain_contract_address,
+              blockchain_evidence_key,
+              blockchain_error
+
+            FROM evidence
+
+            WHERE id = $1
+          `,
+          [
+            request.params.id,
+          ],
+        )
+
+      if (
+        result.rows.length ===
+        0
+      ) {
+        response
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Evidence record not found.",
+          })
+
+        return
+      }
+
+      const record =
+        result.rows[0]
+
+      if (
+        !record.storage_key ||
+        record.storage_provider !==
+          "local"
+      ) {
+        response
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Metadata-only evidence cannot be automatically blockchain anchored because TRACE-X does not possess the original evidence bytes.",
+          })
+
+        return
+      }
+
+      if (
+        record.blockchain_status ===
+          "Anchored" &&
+        record.blockchain_version
+      ) {
+        const evidence =
+          await fetchEvidenceById(
+            record.id,
+          )
+
+        response.json({
+          success:
+            true,
+
+          alreadyAnchored:
+            true,
+
+          message:
+            "Evidence is already blockchain anchored.",
+
+          data:
+            evidence,
+        })
+
+        return
+      }
+
+      const blockchainResult =
+        await anchorAndPersistEvidence(
+          record.id,
+          record.hash,
+        )
+
+      const evidence =
+        await fetchEvidenceById(
+          record.id,
+        )
+
+      if (
+        !blockchainResult.anchored
+      ) {
+        response
+          .status(503)
+          .json({
+            success:
+              false,
+
+            message:
+              "Blockchain anchoring failed.",
+
+            blockchainError:
+              blockchainResult.error,
+
+            data:
+              evidence,
+          })
+
+        return
+      }
+
+      response.json({
+        success:
+          true,
+
+        alreadyAnchored:
+          false,
+
+        message:
+          "Evidence blockchain anchor created successfully.",
+
+        data:
+          evidence,
+      })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
+    }
+  },
+)
+
+/* =========================================================
+   DUAL INTEGRITY VERIFICATION
 ========================================================= */
 
 app.post(
@@ -1889,7 +2220,9 @@ app.post(
 
   async (
     request:
-      Request,
+      Request<{
+        id: string
+      }>,
 
     response:
       Response,
@@ -1902,12 +2235,18 @@ app.post(
               id,
               hash,
               storage_key,
-              storage_provider
+              storage_provider,
+              blockchain_status,
+              blockchain_version,
+              blockchain_tx_hash,
+              blockchain_block_number,
+              blockchain_contract_address,
+              blockchain_evidence_key,
+              blockchain_error
 
             FROM evidence
 
-            WHERE
-              id = $1
+            WHERE id = $1
           `,
           [
             request.params.id,
@@ -1958,6 +2297,10 @@ app.post(
           record.storage_key,
         )
 
+      /* ---------------------------------------------------
+         CHECK THAT FILE STILL EXISTS
+      --------------------------------------------------- */
+
       try {
         await stat(
           storedPath,
@@ -2001,6 +2344,17 @@ app.post(
 
               message:
                 "The stored evidence file is missing.",
+
+              blockchain: {
+                status:
+                  record.blockchain_status,
+
+                checked:
+                  false,
+
+                verified:
+                  null,
+              },
             })
 
           return
@@ -2009,18 +2363,22 @@ app.post(
         throw error
       }
 
+      /* ---------------------------------------------------
+         CHECK 1: FILE VS DATABASE
+      --------------------------------------------------- */
+
       const currentHash =
         await calculateFileSHA256(
           storedPath,
         )
 
-      const matches =
+      const fileMatchesDatabase =
         currentHash ===
         record.hash
 
       const integrity:
         EvidenceIntegrity =
-          matches
+          fileMatchesDatabase
             ? "Verified"
             : "Mismatch"
 
@@ -2041,12 +2399,67 @@ app.post(
         ],
       )
 
+      /* ---------------------------------------------------
+         CHECK 2: BLOCKCHAIN
+      --------------------------------------------------- */
+
+      let blockchainChecked =
+        false
+
+      let databaseHashVerified:
+        boolean | null =
+          null
+
+      let currentFileHashVerified:
+        boolean | null =
+          null
+
+      let blockchainVerificationError:
+        string | null =
+          null
+
+      if (
+        record.blockchain_status ===
+          "Anchored" &&
+        record.blockchain_version
+      ) {
+        try {
+          const databaseVerification =
+            await verifyEvidenceOnBlockchain(
+              record.id,
+              record.blockchain_version,
+              record.hash,
+            )
+
+          const currentFileVerification =
+            await verifyEvidenceOnBlockchain(
+              record.id,
+              record.blockchain_version,
+              currentHash,
+            )
+
+          blockchainChecked =
+            true
+
+          databaseHashVerified =
+            databaseVerification.verified
+
+          currentFileHashVerified =
+            currentFileVerification.verified
+        } catch (error) {
+          blockchainVerificationError =
+            getErrorMessage(
+              error,
+            )
+        }
+      }
+
       response.json({
         success:
           true,
 
         verified:
-          matches,
+          fileMatchesDatabase,
 
         integrity,
 
@@ -2062,9 +2475,59 @@ app.post(
         currentHash,
 
         message:
-          matches
-            ? "Evidence integrity verified successfully."
-            : "Evidence integrity mismatch detected.",
+          fileMatchesDatabase
+            ? "Evidence file matches the PostgreSQL SHA-256."
+            : "Evidence file does not match the PostgreSQL SHA-256.",
+
+        fileVerification: {
+          checked:
+            true,
+
+          verified:
+            fileMatchesDatabase,
+
+          databaseHash:
+            record.hash,
+
+          currentFileHash:
+            currentHash,
+        },
+
+        blockchain: {
+          status:
+            record.blockchain_status,
+
+          checked:
+            blockchainChecked,
+
+          version:
+            record.blockchain_version,
+
+          databaseHashVerified,
+
+          currentFileHashVerified,
+
+          transactionHash:
+            record.blockchain_tx_hash,
+
+          blockNumber:
+            record.blockchain_block_number ===
+            null
+              ? null
+              : Number(
+                  record.blockchain_block_number,
+                ),
+
+          contractAddress:
+            record.blockchain_contract_address,
+
+          evidenceKey:
+            record.blockchain_evidence_key,
+
+          error:
+            blockchainVerificationError ||
+            record.blockchain_error,
+        },
       })
     } catch (error) {
       sendServerError(
@@ -2093,13 +2556,16 @@ app.get(
         "TRACE-X",
 
       version:
-        "0.4.0",
+        "0.5.0",
 
       database:
         "PostgreSQL",
 
       evidenceStorage:
         "Local off-chain storage",
+
+      blockchain:
+        "TRACE-X Evidence Registry",
 
       endpoints: {
         health:
@@ -2123,10 +2589,13 @@ app.get(
         metadataOnlyEvidence:
           "POST /api/evidence",
 
-        uploadEvidenceFile:
+        uploadEvidence:
           "POST /api/evidence/upload",
 
-        verifyStoredEvidence:
+        retryBlockchainAnchor:
+          "POST /api/evidence/:id/anchor",
+
+        verifyEvidence:
           "POST /api/evidence/:id/verify",
       },
     })
@@ -2248,12 +2717,15 @@ async function startServer() {
     console.log(
       "======================================",
     )
+
     console.log(
       "PostgreSQL: CONNECTED",
     )
+
     console.log(
       `Database: ${databaseInfo.database_name}`,
     )
+
     console.log(
       `Database user: ${databaseInfo.database_user}`,
     )
@@ -2278,9 +2750,44 @@ async function startServer() {
       "Evidence storage: READY",
     )
 
-    console.log(
-      `Storage directory: ${EVIDENCE_STORAGE_DIRECTORY}`,
-    )
+    /* -----------------------------------------------------
+       BLOCKCHAIN STARTUP CHECK
+    ----------------------------------------------------- */
+
+    try {
+      const blockchainStatus =
+        await getBlockchainStatus()
+
+      console.log(
+        "Blockchain: CONNECTED",
+      )
+
+      console.log(
+        `Chain ID: ${blockchainStatus.chainId}`,
+      )
+
+      console.log(
+        `Contract: ${blockchainStatus.contractAddress}`,
+      )
+
+      console.log(
+        `Writer authorized: ${blockchainStatus.writerAuthorized}`,
+      )
+    } catch (error) {
+      console.warn(
+        "Blockchain: DEGRADED",
+      )
+
+      console.warn(
+        getErrorMessage(
+          error,
+        ),
+      )
+
+      console.warn(
+        "Evidence can still be stored. Blockchain anchoring will be marked Failed until retried.",
+      )
+    }
 
     console.log(
       "--------------------------------------",
@@ -2306,6 +2813,10 @@ async function startServer() {
         )
 
         console.log(
+          "Blockchain anchoring: ENABLED",
+        )
+
+        console.log(
           "======================================",
         )
 
@@ -2325,15 +2836,13 @@ async function startServer() {
     )
 
     console.error(
-      "TRACE-X could not initialize its dependencies.",
+      "TRACE-X could not initialize PostgreSQL or local storage.",
     )
 
     console.error("")
-
     console.error(
       error,
     )
-
     console.error("")
 
     console.error(

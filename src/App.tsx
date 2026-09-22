@@ -2,10 +2,8 @@ import {
   useEffect,
   useRef,
   useState,
-  type Dispatch,
   type DragEvent,
   type ReactNode,
-  type SetStateAction,
 } from "react"
 
 import {
@@ -18,20 +16,18 @@ import {
   ArrowLeftRight,
   ArrowRight,
   Blocks,
-  CalendarDays,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
   Clock3,
   Copy,
-  Database,
   FileCheck2,
   FileText,
   Fingerprint,
   FolderKanban,
   HardDrive,
-  Hash,
   LayoutDashboard,
+  Link2,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -40,7 +36,6 @@ import {
   RefreshCw,
   ScanSearch,
   Search,
-  Server,
   ShieldAlert,
   ShieldCheck,
   UploadCloud,
@@ -78,7 +73,45 @@ type ApiItemResponse<T> = {
 type ApiErrorResponse = {
   success?: boolean
   message?: string
-  integrity?: EvidenceIntegrity
+  blockchainError?: string
+}
+
+type BlockchainAnchorStatus =
+  | "Not Anchored"
+  | "Pending"
+  | "Anchored"
+  | "Failed"
+
+type BlockchainVerification = {
+  status:
+    BlockchainAnchorStatus
+
+  checked:
+    boolean
+
+  version:
+    number | null
+
+  databaseHashVerified:
+    boolean | null
+
+  currentFileHashVerified:
+    boolean | null
+
+  transactionHash:
+    string | null
+
+  blockNumber:
+    number | null
+
+  contractAddress:
+    string | null
+
+  evidenceKey:
+    string | null
+
+  error:
+    string | null
 }
 
 type VerifyEvidenceResponse = {
@@ -90,6 +123,16 @@ type VerifyEvidenceResponse = {
   expectedHash: string
   currentHash: string
   message: string
+
+  fileVerification: {
+    checked: boolean
+    verified: boolean
+    databaseHash: string
+    currentFileHash: string
+  }
+
+  blockchain:
+    BlockchainVerification
 }
 
 /* =========================================================
@@ -142,7 +185,7 @@ const pageInfo: Record<
   dashboard: {
     title: "Dashboard",
     description:
-      "Overview of evidence integrity and custody activity.",
+      "Overview of evidence integrity, blockchain anchoring and investigations.",
   },
 
   cases: {
@@ -154,7 +197,7 @@ const pageInfo: Record<
   evidence: {
     title: "Evidence",
     description:
-      "Register and securely store digital forensic evidence.",
+      "Register, store and blockchain-anchor digital forensic evidence.",
   },
 
   transfers: {
@@ -166,7 +209,7 @@ const pageInfo: Record<
   verify: {
     title: "Integrity Verification",
     description:
-      "Recalculate SHA-256 from stored evidence and detect modification.",
+      "Compare stored evidence against PostgreSQL and the blockchain anchor.",
   },
 
   audit: {
@@ -255,6 +298,27 @@ type EvidenceRecord = {
   createdAt: string
   updatedAt: string
   versions: EvidenceVersion[]
+
+  blockchainStatus:
+    BlockchainAnchorStatus
+
+  blockchainVersion:
+    number | null
+
+  blockchainTransactionHash:
+    string | null
+
+  blockchainBlockNumber:
+    number | null
+
+  blockchainContractAddress:
+    string | null
+
+  blockchainEvidenceKey:
+    string | null
+
+  blockchainError:
+    string | null
 }
 
 type UploadEvidencePayload = {
@@ -325,7 +389,7 @@ function App() {
     >(null)
 
   /* -------------------------------------------------------
-     LOAD DATA
+     LOAD BACKEND DATA
   ------------------------------------------------------- */
 
   async function loadBackendData() {
@@ -421,7 +485,7 @@ function App() {
   }
 
   /* -------------------------------------------------------
-     REAL EVIDENCE FILE UPLOAD
+     UPLOAD EVIDENCE
   ------------------------------------------------------- */
 
   async function uploadEvidenceOnServer(
@@ -501,7 +565,47 @@ function App() {
   }
 
   /* -------------------------------------------------------
-     VERIFY STORED EVIDENCE
+     RETRY BLOCKCHAIN ANCHOR
+  ------------------------------------------------------- */
+
+  async function retryBlockchainAnchor(
+    evidenceId: string,
+  ) {
+    try {
+      const response =
+        await requestJson<
+          ApiItemResponse<EvidenceRecord>
+        >(
+          `/api/evidence/${encodeURIComponent(
+            evidenceId,
+          )}/anchor`,
+          {
+            method:
+              "POST",
+          },
+        )
+
+      setEvidence(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              evidenceId
+                ? response.data
+                : item,
+          ),
+      )
+
+      return response.data
+    } catch (error) {
+      await loadBackendData()
+
+      throw error
+    }
+  }
+
+  /* -------------------------------------------------------
+     VERIFY
   ------------------------------------------------------- */
 
   async function verifyEvidenceOnServer(
@@ -542,11 +646,6 @@ function App() {
 
       return response
     } catch (error) {
-      /*
-       * A missing file can cause the backend to mark the
-       * database record as Mismatch while returning an
-       * error status, so reload the latest database state.
-       */
       await loadBackendData()
 
       throw error
@@ -713,9 +812,6 @@ function App() {
                   rounded-full
                   bg-white/5
                   text-white/50
-                  transition
-                  hover:bg-white/10
-                  hover:text-white
                 "
               >
                 <X
@@ -754,7 +850,7 @@ function App() {
       </AnimatePresence>
 
       {/* ===================================================
-          MAIN AREA
+          MAIN CONTENT
       =================================================== */}
 
       <div
@@ -825,7 +921,6 @@ function App() {
                 className="
                   text-lg
                   font-semibold
-                  tracking-tight
                 "
               >
                 {
@@ -854,15 +949,15 @@ function App() {
                 px-4
                 py-3
                 text-xs
-                text-emerald-200/50
+                text-emerald-200/55
                 md:flex
               "
             >
-              <Server
+              <Blocks
                 size={14}
               />
 
-              PostgreSQL + Off-chain
+              Blockchain Enabled
             </div>
 
             <motion.button
@@ -985,6 +1080,9 @@ function App() {
                   onUploadEvidence={
                     uploadEvidenceOnServer
                   }
+                  onRetryAnchor={
+                    retryBlockchainAnchor
+                  }
                 />
               ) : activePage ===
                 "verify" ? (
@@ -994,6 +1092,9 @@ function App() {
                   }
                   onVerify={
                     verifyEvidenceOnServer
+                  }
+                  onRetryAnchor={
+                    retryBlockchainAnchor
                   }
                 />
               ) : (
@@ -1020,13 +1121,11 @@ function SidebarContent({
   setActivePage,
   onLogout,
 }: {
-  activePage: Page
+  activePage:
+    Page
 
   setActivePage:
-    Dispatch<
-      SetStateAction<Page>
-    > |
-    ((page: Page) => void)
+    (page: Page) => void
 
   onLogout:
     () => void
@@ -1207,7 +1306,7 @@ function SidebarContent({
               text-emerald-200/70
             "
           >
-            Storage Ready
+            TRACE-X Ready
           </span>
         </div>
 
@@ -1219,8 +1318,9 @@ function SidebarContent({
             text-white/25
           "
         >
-          PostgreSQL metadata +
-          off-chain evidence files
+          PostgreSQL +
+          off-chain storage +
+          blockchain anchoring
         </p>
       </div>
 
@@ -1244,7 +1344,6 @@ function SidebarContent({
           text-sm
           text-white/35
           hover:bg-white/[0.04]
-          hover:text-white/70
         "
       >
         <LogOut
@@ -1428,7 +1527,6 @@ function ApiConnectionBanner({
           flex
           h-9
           items-center
-          justify-center
           gap-2
           rounded-xl
           border
@@ -1470,6 +1568,13 @@ function Dashboard({
         "Verified",
     ).length
 
+  const anchored =
+    evidence.filter(
+      (item) =>
+        item.blockchainStatus ===
+        "Anchored",
+    ).length
+
   const mismatches =
     evidence.filter(
       (item) =>
@@ -1496,26 +1601,26 @@ function Dashboard({
         "
       >
         <StatCard
-          label="Evidence"
+          label="Verified Files"
           value={
-            evidence.length
+            verified
           }
-          detail="PostgreSQL records"
+          detail="File integrity"
           icon={
-            <Database
+            <ShieldCheck
               size={18}
             />
           }
         />
 
         <StatCard
-          label="Verified"
+          label="Blockchain Anchored"
           value={
-            verified
+            anchored
           }
-          detail="Integrity checks"
+          detail="Smart contract records"
           icon={
-            <ShieldCheck
+            <Blocks
               size={18}
             />
           }
@@ -1591,8 +1696,8 @@ function Dashboard({
                   text-white/25
                 "
               >
-                Latest PostgreSQL
-                records
+                Integrity and
+                blockchain state
               </p>
             </div>
 
@@ -1617,59 +1722,84 @@ function Dashboard({
                   }
                   className="
                     flex
-                    items-center
-                    gap-4
+                    flex-col
+                    gap-3
                     border-b
                     border-white/[0.05]
                     px-5
                     py-4
                     last:border-0
+                    sm:flex-row
+                    sm:items-center
                   "
                 >
-                  <FileText
-                    size={16}
+                  <div
                     className="
-                      shrink-0
-                      text-white/35
+                      flex
+                      min-w-0
+                      flex-1
+                      items-center
+                      gap-4
                     "
-                  />
+                  >
+                    <FileText
+                      size={16}
+                      className="
+                        shrink-0
+                        text-white/35
+                      "
+                    />
+
+                    <div
+                      className="
+                        min-w-0
+                      "
+                    >
+                      <p
+                        className="
+                          truncate
+                          text-sm
+                          text-white/70
+                        "
+                      >
+                        {
+                          item.name
+                        }
+                      </p>
+
+                      <p
+                        className="
+                          mt-1
+                          text-xs
+                          text-white/25
+                        "
+                      >
+                        {
+                          item.id
+                        }
+                      </p>
+                    </div>
+                  </div>
 
                   <div
                     className="
-                      min-w-0
-                      flex-1
+                      flex
+                      flex-wrap
+                      gap-2
                     "
                   >
-                    <p
-                      className="
-                        truncate
-                        text-sm
-                        text-white/70
-                      "
-                    >
-                      {
-                        item.name
+                    <IntegrityBadge
+                      integrity={
+                        item.integrity
                       }
-                    </p>
+                    />
 
-                    <p
-                      className="
-                        mt-1
-                        text-xs
-                        text-white/25
-                      "
-                    >
-                      {
-                        item.id
+                    <BlockchainBadge
+                      status={
+                        item.blockchainStatus
                       }
-                    </p>
+                    />
                   </div>
-
-                  <IntegrityBadge
-                    integrity={
-                      item.integrity
-                    }
-                  />
                 </div>
               ),
             )}
@@ -1696,7 +1826,7 @@ function Dashboard({
               font-medium
             "
           >
-            TRACE-X Storage
+            Three-Layer Integrity
           </h3>
 
           <p
@@ -1707,11 +1837,11 @@ function Dashboard({
               text-white/30
             "
           >
-            Metadata and hashes are
-            stored in PostgreSQL.
-            Uploaded evidence bytes
-            remain in secure off-chain
-            storage.
+            TRACE-X separates
+            evidence bytes,
+            operational metadata
+            and immutable hash
+            anchoring.
           </p>
 
           <div
@@ -1721,23 +1851,23 @@ function Dashboard({
             "
           >
             <StorageRow
+              label="Evidence bytes"
+              value="Off-chain"
+            />
+
+            <StorageRow
               label="Metadata"
               value="PostgreSQL"
             />
 
             <StorageRow
-              label="Evidence files"
-              value="Off-chain"
-            />
-
-            <StorageRow
-              label="Hash"
+              label="Fingerprint"
               value="SHA-256"
             />
 
             <StorageRow
-              label="Blockchain"
-              value="Next phase"
+              label="Anchor"
+              value="Hardhat chain"
             />
           </div>
         </div>
@@ -2422,6 +2552,7 @@ function EvidencePage({
   evidence,
   cases,
   onUploadEvidence,
+  onRetryAnchor,
 }: {
   evidence:
     EvidenceRecord[]
@@ -2432,6 +2563,11 @@ function EvidencePage({
   onUploadEvidence: (
     payload:
       UploadEvidencePayload,
+  ) => Promise<EvidenceRecord>
+
+  onRetryAnchor: (
+    evidenceId:
+      string,
   ) => Promise<EvidenceRecord>
 }) {
   const [
@@ -2549,6 +2685,30 @@ function EvidencePage({
     caseId,
   ])
 
+  useEffect(() => {
+    if (
+      !selected
+    ) {
+      return
+    }
+
+    const fresh =
+      evidence.find(
+        (item) =>
+          item.id ===
+          selected.id,
+      )
+
+    if (fresh) {
+      setSelected(
+        fresh,
+      )
+    }
+  }, [
+    evidence,
+    selected?.id,
+  ])
+
   const filtered =
     evidence.filter(
       (item) => {
@@ -2607,11 +2767,6 @@ function EvidencePage({
       null,
     )
 
-    /*
-     * Browser hashing is only a preview.
-     * The backend will ALWAYS calculate the authoritative
-     * hash from the uploaded bytes.
-     */
     if (
       file.size >
       BROWSER_HASH_LIMIT
@@ -2638,7 +2793,7 @@ function EvidencePage({
       )
     } catch {
       setError(
-        "The browser could not calculate the preview SHA-256. The backend can still calculate the authoritative hash during upload.",
+        "Browser preview hashing failed. The backend can still calculate the authoritative SHA-256.",
       )
     } finally {
       setHashing(
@@ -2725,17 +2880,13 @@ function EvidencePage({
           },
         )
 
-      /*
-       * For small files we calculated a browser preview.
-       * Compare it with the authoritative backend result.
-       */
       if (
         browserHash &&
         browserHash !==
           storedEvidence.hash
       ) {
         console.warn(
-          "TRACE-X hash disagreement detected between browser and backend.",
+          "TRACE-X browser/backend SHA-256 disagreement detected.",
         )
       }
 
@@ -2835,7 +2986,7 @@ function EvidencePage({
         />
 
         <MiniStat
-          label="Verified"
+          label="File Verified"
           value={
             evidence.filter(
               (item) =>
@@ -2846,23 +2997,23 @@ function EvidencePage({
         />
 
         <MiniStat
-          label="Pending"
+          label="Anchored"
           value={
             evidence.filter(
               (item) =>
-                item.integrity ===
-                "Pending",
+                item.blockchainStatus ===
+                "Anchored",
             ).length
           }
         />
 
         <MiniStat
-          label="Mismatch"
+          label="Anchor Failed"
           value={
             evidence.filter(
               (item) =>
-                item.integrity ===
-                "Mismatch",
+                item.blockchainStatus ===
+                "Failed",
             ).length
           }
         />
@@ -2967,6 +3118,12 @@ function EvidencePage({
                           item.integrity
                         }
                       />
+
+                      <BlockchainBadge
+                        status={
+                          item.blockchainStatus
+                        }
+                      />
                     </div>
 
                     <p
@@ -3027,9 +3184,14 @@ function EvidencePage({
                   />
 
                   <MetaItem
-                    label="CUSTODIAN"
+                    label="BLOCK"
                     value={
-                      item.custodian
+                      item.blockchainBlockNumber ===
+                      null
+                        ? "—"
+                        : String(
+                            item.blockchainBlockNumber,
+                          )
                     }
                   />
 
@@ -3070,6 +3232,9 @@ function EvidencePage({
                 null,
               )
             }
+            onRetryAnchor={
+              onRetryAnchor
+            }
           />
         )}
       </AnimatePresence>
@@ -3090,7 +3255,7 @@ function EvidencePage({
             >
               <ModalHeader
                 title="Register Evidence"
-                description="Upload the actual evidence file. TRACE-X will store it off-chain and calculate SHA-256 again on the backend."
+                description="Upload the real evidence file. TRACE-X will hash it on the server, store it off-chain and automatically attempt blockchain anchoring."
                 onClose={() =>
                   setRegisterOpen(
                     false,
@@ -3207,7 +3372,7 @@ function EvidencePage({
                       ? formatBytes(
                           selectedFile.size,
                         )
-                      : "The actual file will be uploaded to TRACE-X"}
+                      : "Evidence bytes remain off-chain"}
                   </p>
                 </div>
 
@@ -3230,7 +3395,6 @@ function EvidencePage({
                       >
                         Calculating
                         browser preview
-                        hash
                       </p>
 
                       <p
@@ -3241,10 +3405,10 @@ function EvidencePage({
                         "
                       >
                         The backend will
-                        calculate its own
+                        independently
+                        calculate the
                         authoritative
-                        SHA-256 after
-                        upload.
+                        SHA-256.
                       </p>
                     </div>
                   </InfoPanel>
@@ -3331,14 +3495,13 @@ function EvidencePage({
                           text-white/25
                         "
                       >
-                        This file is
-                        larger than
-                        256 MB. TRACE-X
-                        avoids loading it
-                        completely into
-                        browser memory.
-                        The backend will
-                        hash it using a
+                        Files larger
+                        than 256 MB are
+                        not loaded fully
+                        into browser
+                        memory. The
+                        backend hashes
+                        them using a
                         stream.
                       </p>
                     </div>
@@ -3504,7 +3667,7 @@ function EvidencePage({
                     className={
                       textareaClass
                     }
-                    placeholder="Describe acquisition source, device, context, etc..."
+                    placeholder="Describe acquisition source and context..."
                   />
                 </FormField>
 
@@ -3524,7 +3687,7 @@ function EvidencePage({
                       gap-3
                     "
                   >
-                    <Server
+                    <Blocks
                       size={17}
                       className="
                         mt-0.5
@@ -3540,18 +3703,17 @@ function EvidencePage({
                         text-white/30
                       "
                     >
-                      The selected file
-                      will now be sent
-                      to Express. The
-                      server writes it
-                      to off-chain
-                      storage and
-                      calculates SHA-256
-                      from those stored
-                      bytes. That server
-                      hash becomes the
-                      authoritative
-                      TRACE-X record.
+                      TRACE-X stores
+                      the evidence file
+                      off-chain, stores
+                      metadata in
+                      PostgreSQL and
+                      sends only an
+                      opaque evidence
+                      key plus SHA-256
+                      fingerprint to
+                      the smart
+                      contract.
                     </p>
                   </div>
                 </div>
@@ -3582,8 +3744,8 @@ function EvidencePage({
                 busy={
                   uploading
                 }
-                confirmText="Store Evidence"
-                busyText="Uploading..."
+                confirmText="Store & Anchor"
+                busyText="Storing..."
               />
             </ModalCard>
           </>
@@ -3594,771 +3756,44 @@ function EvidencePage({
 }
 
 /* =========================================================
-   VERIFY PAGE
-========================================================= */
-
-function VerifyPage({
-  evidence,
-  onVerify,
-}: {
-  evidence:
-    EvidenceRecord[]
-
-  onVerify: (
-    evidenceId: string,
-  ) => Promise<VerifyEvidenceResponse>
-}) {
-  const [
-    search,
-    setSearch,
-  ] =
-    useState("")
-
-  const [
-    selectedId,
-    setSelectedId,
-  ] =
-    useState<
-      string | null
-    >(null)
-
-  const [
-    verifying,
-    setVerifying,
-  ] =
-    useState(false)
-
-  const [
-    result,
-    setResult,
-  ] =
-    useState<
-      VerifyEvidenceResponse | null
-    >(null)
-
-  const [
-    error,
-    setError,
-  ] =
-    useState<
-      string | null
-    >(null)
-
-  const filtered =
-    evidence.filter(
-      (item) => {
-        const query =
-          search
-            .trim()
-            .toLowerCase()
-
-        return (
-          item.name
-            .toLowerCase()
-            .includes(
-              query,
-            ) ||
-          item.id
-            .toLowerCase()
-            .includes(
-              query,
-            ) ||
-          item.caseId
-            .toLowerCase()
-            .includes(
-              query,
-            )
-        )
-      },
-    )
-
-  const selectedEvidence =
-    evidence.find(
-      (item) =>
-        item.id ===
-        selectedId,
-    ) ??
-    null
-
-  async function verify() {
-    if (
-      !selectedId ||
-      verifying
-    ) {
-      return
-    }
-
-    setVerifying(
-      true,
-    )
-
-    setResult(
-      null,
-    )
-
-    setError(
-      null,
-    )
-
-    try {
-      const verification =
-        await onVerify(
-          selectedId,
-        )
-
-      setResult(
-        verification,
-      )
-    } catch (verifyError) {
-      setError(
-        getErrorMessage(
-          verifyError,
-        ),
-      )
-    } finally {
-      setVerifying(
-        false,
-      )
-    }
-  }
-
-  return (
-    <div
-      className="
-        grid
-        grid-cols-1
-        gap-4
-        xl:grid-cols-[1.05fr_0.95fr]
-      "
-    >
-      <div
-        className="
-          glass
-          rounded-[28px]
-          p-5
-          md:p-6
-        "
-      >
-        <div
-          className="
-            flex
-            items-center
-            gap-3
-          "
-        >
-          <ScanSearch
-            size={20}
-            className="
-              text-blue-300
-            "
-          />
-
-          <div>
-            <h3
-              className="
-                text-base
-                font-medium
-              "
-            >
-              Select Evidence
-            </h3>
-
-            <p
-              className="
-                mt-1
-                text-xs
-                text-white/25
-              "
-            >
-              Choose a record to
-              re-hash from storage.
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="
-            mt-5
-          "
-        >
-          <SearchBox
-            value={
-              search
-            }
-            onChange={
-              setSearch
-            }
-            placeholder="Search evidence..."
-          />
-        </div>
-
-        <div
-          className="
-            mt-5
-            max-h-[550px]
-            space-y-3
-            overflow-y-auto
-            pr-1
-          "
-        >
-          {filtered.map(
-            (item) => {
-              const active =
-                selectedId ===
-                item.id
-
-              return (
-                <motion.button
-                  type="button"
-                  key={
-                    item.id
-                  }
-                  whileTap={{
-                    scale:
-                      0.99,
-                  }}
-                  onClick={() => {
-                    setSelectedId(
-                      item.id,
-                    )
-
-                    setResult(
-                      null,
-                    )
-
-                    setError(
-                      null,
-                    )
-                  }}
-                  className={`
-                    w-full
-                    rounded-[20px]
-                    border
-                    p-4
-                    text-left
-                    transition
-
-                    ${
-                      active
-                        ? "border-blue-300/25 bg-blue-400/[0.07]"
-                        : "border-white/[0.07] bg-white/[0.025] hover:bg-white/[0.05]"
-                    }
-                  `}
-                >
-                  <div
-                    className="
-                      flex
-                      items-center
-                      justify-between
-                      gap-3
-                    "
-                  >
-                    <div
-                      className="
-                        min-w-0
-                      "
-                    >
-                      <p
-                        className="
-                          truncate
-                          text-sm
-                          text-white/70
-                        "
-                      >
-                        {
-                          item.name
-                        }
-                      </p>
-
-                      <p
-                        className="
-                          mt-1
-                          text-xs
-                          text-white/25
-                        "
-                      >
-                        {
-                          item.id
-                        }{" "}
-                        •{" "}
-                        {
-                          item.caseId
-                        }
-                      </p>
-                    </div>
-
-                    <IntegrityBadge
-                      integrity={
-                        item.integrity
-                      }
-                    />
-                  </div>
-                </motion.button>
-              )
-            },
-          )}
-        </div>
-      </div>
-
-      <div
-        className="
-          glass
-          rounded-[28px]
-          p-5
-          md:p-6
-        "
-      >
-        {!selectedEvidence ? (
-          <div
-            className="
-              flex
-              min-h-[450px]
-              items-center
-              justify-center
-              text-center
-            "
-          >
-            <div>
-              <Fingerprint
-                size={36}
-                className="
-                  mx-auto
-                  text-white/20
-                "
-              />
-
-              <h3
-                className="
-                  mt-5
-                  text-lg
-                  font-medium
-                "
-              >
-                Select an evidence
-                record
-              </h3>
-
-              <p
-                className="
-                  mx-auto
-                  mt-2
-                  max-w-sm
-                  text-sm
-                  leading-6
-                  text-white/25
-                "
-              >
-                TRACE-X will read
-                the stored evidence,
-                calculate SHA-256,
-                and compare it with
-                the original database
-                hash.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div
-              className="
-                flex
-                items-start
-                justify-between
-                gap-4
-              "
-            >
-              <div>
-                <p
-                  className="
-                    text-xs
-                    text-white/25
-                  "
-                >
-                  {
-                    selectedEvidence.id
-                  }
-                </p>
-
-                <h3
-                  className="
-                    mt-2
-                    break-all
-                    text-xl
-                    font-medium
-                  "
-                >
-                  {
-                    selectedEvidence.name
-                  }
-                </h3>
-
-                <p
-                  className="
-                    mt-2
-                    text-xs
-                    text-white/25
-                  "
-                >
-                  {
-                    selectedEvidence.caseTitle
-                  }
-                </p>
-              </div>
-
-              <IntegrityBadge
-                integrity={
-                  selectedEvidence.integrity
-                }
-              />
-            </div>
-
-            <Divider />
-
-            <p
-              className="
-                text-xs
-                text-white/25
-              "
-            >
-              AUTHORITATIVE SHA-256
-            </p>
-
-            <div
-              className="
-                mt-3
-                rounded-[20px]
-                border
-                border-white/[0.07]
-                bg-black/20
-                p-4
-              "
-            >
-              <p
-                className="
-                  break-all
-                  font-mono
-                  text-[11px]
-                  leading-5
-                  text-white/45
-                "
-              >
-                {
-                  selectedEvidence.hash
-                }
-              </p>
-            </div>
-
-            <motion.button
-              type="button"
-              disabled={
-                verifying
-              }
-              whileHover={
-                verifying
-                  ? {}
-                  : {
-                      scale:
-                        1.01,
-                    }
-              }
-              whileTap={
-                verifying
-                  ? {}
-                  : {
-                      scale:
-                        0.98,
-                    }
-              }
-              onClick={() =>
-                void verify()
-              }
-              className="
-                mt-5
-                flex
-                h-12
-                w-full
-                items-center
-                justify-center
-                gap-2
-                rounded-2xl
-                bg-white
-                text-sm
-                font-semibold
-                text-black
-                disabled:cursor-not-allowed
-                disabled:opacity-40
-              "
-            >
-              {verifying ? (
-                <>
-                  <LoaderCircle
-                    size={17}
-                    className="
-                      animate-spin
-                    "
-                  />
-
-                  Recalculating
-                  SHA-256...
-                </>
-              ) : (
-                <>
-                  <ScanSearch
-                    size={17}
-                  />
-
-                  Verify Stored File
-                </>
-              )}
-            </motion.button>
-
-            {error && (
-              <div
-                className="
-                  mt-5
-                "
-              >
-                <FormError
-                  message={
-                    error
-                  }
-                />
-
-                <p
-                  className="
-                    mt-3
-                    text-xs
-                    leading-5
-                    text-white/25
-                  "
-                >
-                  Older records created
-                  before real file
-                  storage are
-                  metadata-only and
-                  cannot be re-hashed.
-                  Register a new file
-                  through the Evidence
-                  page to test full
-                  verification.
-                </p>
-              </div>
-            )}
-
-            {result && (
-              <VerificationResult
-                result={
-                  result
-                }
-              />
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function VerificationResult({
-  result,
-}: {
-  result:
-    VerifyEvidenceResponse
-}) {
-  return (
-    <motion.div
-      initial={{
-        opacity:
-          0,
-
-        y:
-          12,
-      }}
-      animate={{
-        opacity:
-          1,
-
-        y:
-          0,
-      }}
-      className={`
-        mt-5
-        rounded-[24px]
-        border
-        p-5
-
-        ${
-          result.verified
-            ? "border-emerald-400/15 bg-emerald-400/[0.05]"
-            : "border-red-400/20 bg-red-400/[0.06]"
-        }
-      `}
-    >
-      <div
-        className="
-          flex
-          items-center
-          gap-3
-        "
-      >
-        {result.verified ? (
-          <ShieldCheck
-            size={22}
-            className="
-              text-emerald-300
-            "
-          />
-        ) : (
-          <ShieldAlert
-            size={22}
-            className="
-              text-red-300
-            "
-          />
-        )}
-
-        <div>
-          <p
-            className={`
-              text-sm
-              font-medium
-
-              ${
-                result.verified
-                  ? "text-emerald-200"
-                  : "text-red-200"
-              }
-            `}
-          >
-            {result.verified
-              ? "Integrity Verified"
-              : "Integrity Mismatch"}
-          </p>
-
-          <p
-            className="
-              mt-1
-              text-xs
-              text-white/30
-            "
-          >
-            {
-              result.message
-            }
-          </p>
-        </div>
-      </div>
-
-      <div
-        className="
-          mt-5
-          space-y-4
-        "
-      >
-        <HashResult
-          label="EXPECTED HASH"
-          hash={
-            result.expectedHash
-          }
-        />
-
-        <HashResult
-          label="CURRENT HASH"
-          hash={
-            result.currentHash
-          }
-        />
-      </div>
-
-      <div
-        className="
-          mt-5
-          flex
-          items-center
-          justify-between
-          border-t
-          border-white/[0.07]
-          pt-4
-        "
-      >
-        <span
-          className="
-            text-xs
-            text-white/25
-          "
-        >
-          Algorithm
-        </span>
-
-        <span
-          className="
-            font-mono
-            text-xs
-            text-white/50
-          "
-        >
-          {
-            result.algorithm
-          }
-        </span>
-      </div>
-    </motion.div>
-  )
-}
-
-function HashResult({
-  label,
-  hash,
-}: {
-  label: string
-  hash: string
-}) {
-  return (
-    <div>
-      <p
-        className="
-          text-[10px]
-          text-white/25
-        "
-      >
-        {label}
-      </p>
-
-      <p
-        className="
-          mt-2
-          break-all
-          font-mono
-          text-[10px]
-          leading-5
-          text-white/45
-        "
-      >
-        {hash}
-      </p>
-    </div>
-  )
-}
-
-/* =========================================================
    EVIDENCE DETAILS
 ========================================================= */
 
 function EvidenceDetails({
   evidence,
   onClose,
+  onRetryAnchor,
 }: {
   evidence:
     EvidenceRecord
 
   onClose:
     () => void
+
+  onRetryAnchor: (
+    evidenceId:
+      string,
+  ) => Promise<EvidenceRecord>
 }) {
   const [
     copied,
     setCopied,
   ] =
     useState(false)
+
+  const [
+    retrying,
+    setRetrying,
+  ] =
+    useState(false)
+
+  const [
+    retryError,
+    setRetryError,
+  ] =
+    useState<
+      string | null
+    >(null)
 
   async function copyHash() {
     try {
@@ -4381,6 +3816,32 @@ function EvidenceDetails({
       )
     } catch {
       setCopied(
+        false,
+      )
+    }
+  }
+
+  async function retryAnchor() {
+    setRetrying(
+      true,
+    )
+
+    setRetryError(
+      null,
+    )
+
+    try {
+      await onRetryAnchor(
+        evidence.id,
+      )
+    } catch (error) {
+      setRetryError(
+        getErrorMessage(
+          error,
+        ),
+      )
+    } finally {
+      setRetrying(
         false,
       )
     }
@@ -4425,7 +3886,7 @@ function EvidenceDetails({
           top-3
           z-[80]
           w-[calc(100%_-_24px)]
-          max-w-[600px]
+          max-w-[640px]
           overflow-y-auto
           rounded-[32px]
           p-6
@@ -4471,11 +3932,25 @@ function EvidenceDetails({
             mt-7
           "
         >
-          <IntegrityBadge
-            integrity={
-              evidence.integrity
-            }
-          />
+          <div
+            className="
+              flex
+              flex-wrap
+              gap-2
+            "
+          >
+            <IntegrityBadge
+              integrity={
+                evidence.integrity
+              }
+            />
+
+            <BlockchainBadge
+              status={
+                evidence.blockchainStatus
+              }
+            />
+          </div>
 
           <p
             className="
@@ -4644,6 +4119,202 @@ function EvidenceDetails({
         <div
           className="
             mt-7
+            rounded-[26px]
+            border
+            border-white/[0.07]
+            bg-white/[0.025]
+            p-5
+          "
+        >
+          <div
+            className="
+              flex
+              items-center
+              justify-between
+              gap-3
+            "
+          >
+            <div
+              className="
+                flex
+                items-center
+                gap-3
+              "
+            >
+              <Blocks
+                size={18}
+                className="
+                  text-blue-300
+                "
+              />
+
+              <div>
+                <p
+                  className="
+                    text-sm
+                    text-white/70
+                  "
+                >
+                  Blockchain Anchor
+                </p>
+
+                <p
+                  className="
+                    mt-1
+                    text-xs
+                    text-white/25
+                  "
+                >
+                  Smart-contract
+                  evidence fingerprint
+                </p>
+              </div>
+            </div>
+
+            <BlockchainBadge
+              status={
+                evidence.blockchainStatus
+              }
+            />
+          </div>
+
+          <div
+            className="
+              mt-5
+              grid
+              gap-3
+              sm:grid-cols-2
+            "
+          >
+            <BlockchainField
+              label="VERSION"
+              value={
+                evidence.blockchainVersion ===
+                null
+                  ? "—"
+                  : String(
+                      evidence.blockchainVersion,
+                    )
+              }
+            />
+
+            <BlockchainField
+              label="BLOCK"
+              value={
+                evidence.blockchainBlockNumber ===
+                null
+                  ? "—"
+                  : String(
+                      evidence.blockchainBlockNumber,
+                    )
+              }
+            />
+          </div>
+
+          {evidence.blockchainTransactionHash && (
+            <LongValue
+              label="TRANSACTION HASH"
+              value={
+                evidence.blockchainTransactionHash
+              }
+            />
+          )}
+
+          {evidence.blockchainEvidenceKey && (
+            <LongValue
+              label="EVIDENCE KEY"
+              value={
+                evidence.blockchainEvidenceKey
+              }
+            />
+          )}
+
+          {evidence.blockchainContractAddress && (
+            <LongValue
+              label="CONTRACT ADDRESS"
+              value={
+                evidence.blockchainContractAddress
+              }
+            />
+          )}
+
+          {evidence.blockchainError && (
+            <div
+              className="
+                mt-4
+              "
+            >
+              <FormError
+                message={
+                  evidence.blockchainError
+                }
+              />
+            </div>
+          )}
+
+          {evidence.blockchainStatus ===
+            "Failed" && (
+            <button
+              type="button"
+              disabled={
+                retrying
+              }
+              onClick={() =>
+                void retryAnchor()
+              }
+              className="
+                mt-5
+                flex
+                h-11
+                w-full
+                items-center
+                justify-center
+                gap-2
+                rounded-2xl
+                bg-white
+                text-sm
+                font-semibold
+                text-black
+                disabled:opacity-40
+              "
+            >
+              {retrying ? (
+                <LoaderCircle
+                  size={16}
+                  className="
+                    animate-spin
+                  "
+                />
+              ) : (
+                <RefreshCw
+                  size={16}
+                />
+              )}
+
+              {retrying
+                ? "Retrying..."
+                : "Retry Blockchain Anchor"}
+            </button>
+          )}
+
+          {retryError && (
+            <div
+              className="
+                mt-4
+              "
+            >
+              <FormError
+                message={
+                  retryError
+                }
+              />
+            </div>
+          )}
+        </div>
+
+        <div
+          className="
+            mt-7
           "
         >
           <p
@@ -4738,6 +4409,1362 @@ function EvidenceDetails({
         </div>
       </motion.aside>
     </>
+  )
+}
+
+function BlockchainField({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className="
+        rounded-[18px]
+        border
+        border-white/[0.06]
+        bg-black/15
+        p-3
+      "
+    >
+      <p
+        className="
+          text-[10px]
+          text-white/20
+        "
+      >
+        {label}
+      </p>
+
+      <p
+        className="
+          mt-2
+          text-sm
+          text-white/55
+        "
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function LongValue({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div
+      className="
+        mt-4
+      "
+    >
+      <p
+        className="
+          text-[10px]
+          text-white/20
+        "
+      >
+        {label}
+      </p>
+
+      <div
+        className="
+          mt-2
+          rounded-[18px]
+          border
+          border-white/[0.06]
+          bg-black/20
+          p-3
+        "
+      >
+        <p
+          className="
+            break-all
+            font-mono
+            text-[10px]
+            leading-5
+            text-white/40
+          "
+        >
+          {value}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   VERIFY PAGE
+========================================================= */
+
+function VerifyPage({
+  evidence,
+  onVerify,
+  onRetryAnchor,
+}: {
+  evidence:
+    EvidenceRecord[]
+
+  onVerify: (
+    evidenceId:
+      string,
+  ) => Promise<VerifyEvidenceResponse>
+
+  onRetryAnchor: (
+    evidenceId:
+      string,
+  ) => Promise<EvidenceRecord>
+}) {
+  const [
+    search,
+    setSearch,
+  ] =
+    useState("")
+
+  const [
+    selectedId,
+    setSelectedId,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const [
+    verifying,
+    setVerifying,
+  ] =
+    useState(false)
+
+  const [
+    retrying,
+    setRetrying,
+  ] =
+    useState(false)
+
+  const [
+    result,
+    setResult,
+  ] =
+    useState<
+      VerifyEvidenceResponse | null
+    >(null)
+
+  const [
+    error,
+    setError,
+  ] =
+    useState<
+      string | null
+    >(null)
+
+  const filtered =
+    evidence.filter(
+      (item) => {
+        const query =
+          search
+            .trim()
+            .toLowerCase()
+
+        return (
+          item.name
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          item.id
+            .toLowerCase()
+            .includes(
+              query,
+            ) ||
+          item.caseId
+            .toLowerCase()
+            .includes(
+              query,
+            )
+        )
+      },
+    )
+
+  const selectedEvidence =
+    evidence.find(
+      (item) =>
+        item.id ===
+        selectedId,
+    ) ??
+    null
+
+  async function verify() {
+    if (
+      !selectedId ||
+      verifying
+    ) {
+      return
+    }
+
+    setVerifying(
+      true,
+    )
+
+    setResult(
+      null,
+    )
+
+    setError(
+      null,
+    )
+
+    try {
+      const verification =
+        await onVerify(
+          selectedId,
+        )
+
+      setResult(
+        verification,
+      )
+    } catch (verifyError) {
+      setError(
+        getErrorMessage(
+          verifyError,
+        ),
+      )
+    } finally {
+      setVerifying(
+        false,
+      )
+    }
+  }
+
+  async function retryAnchor() {
+    if (
+      !selectedId ||
+      retrying
+    ) {
+      return
+    }
+
+    setRetrying(
+      true,
+    )
+
+    setError(
+      null,
+    )
+
+    try {
+      await onRetryAnchor(
+        selectedId,
+      )
+
+      setResult(
+        null,
+      )
+    } catch (retryError) {
+      setError(
+        getErrorMessage(
+          retryError,
+        ),
+      )
+    } finally {
+      setRetrying(
+        false,
+      )
+    }
+  }
+
+  return (
+    <div
+      className="
+        grid
+        grid-cols-1
+        gap-4
+        xl:grid-cols-[0.9fr_1.1fr]
+      "
+    >
+      <div
+        className="
+          glass
+          rounded-[28px]
+          p-5
+          md:p-6
+        "
+      >
+        <div
+          className="
+            flex
+            items-center
+            gap-3
+          "
+        >
+          <ScanSearch
+            size={20}
+            className="
+              text-blue-300
+            "
+          />
+
+          <div>
+            <h3
+              className="
+                text-base
+                font-medium
+              "
+            >
+              Select Evidence
+            </h3>
+
+            <p
+              className="
+                mt-1
+                text-xs
+                text-white/25
+              "
+            >
+              Run file and
+              blockchain integrity
+              checks.
+            </p>
+          </div>
+        </div>
+
+        <div
+          className="
+            mt-5
+          "
+        >
+          <SearchBox
+            value={
+              search
+            }
+            onChange={
+              setSearch
+            }
+            placeholder="Search evidence..."
+          />
+        </div>
+
+        <div
+          className="
+            mt-5
+            max-h-[600px]
+            space-y-3
+            overflow-y-auto
+            pr-1
+          "
+        >
+          {filtered.map(
+            (item) => {
+              const active =
+                selectedId ===
+                item.id
+
+              return (
+                <motion.button
+                  type="button"
+                  key={
+                    item.id
+                  }
+                  whileTap={{
+                    scale:
+                      0.99,
+                  }}
+                  onClick={() => {
+                    setSelectedId(
+                      item.id,
+                    )
+
+                    setResult(
+                      null,
+                    )
+
+                    setError(
+                      null,
+                    )
+                  }}
+                  className={`
+                    w-full
+                    rounded-[20px]
+                    border
+                    p-4
+                    text-left
+                    transition
+
+                    ${
+                      active
+                        ? "border-blue-300/25 bg-blue-400/[0.07]"
+                        : "border-white/[0.07] bg-white/[0.025] hover:bg-white/[0.05]"
+                    }
+                  `}
+                >
+                  <div
+                    className="
+                      min-w-0
+                    "
+                  >
+                    <p
+                      className="
+                        truncate
+                        text-sm
+                        text-white/70
+                      "
+                    >
+                      {
+                        item.name
+                      }
+                    </p>
+
+                    <p
+                      className="
+                        mt-1
+                        text-xs
+                        text-white/25
+                      "
+                    >
+                      {
+                        item.id
+                      }{" "}
+                      •{" "}
+                      {
+                        item.caseId
+                      }
+                    </p>
+
+                    <div
+                      className="
+                        mt-3
+                        flex
+                        flex-wrap
+                        gap-2
+                      "
+                    >
+                      <IntegrityBadge
+                        integrity={
+                          item.integrity
+                        }
+                      />
+
+                      <BlockchainBadge
+                        status={
+                          item.blockchainStatus
+                        }
+                      />
+                    </div>
+                  </div>
+                </motion.button>
+              )
+            },
+          )}
+        </div>
+      </div>
+
+      <div
+        className="
+          glass
+          rounded-[28px]
+          p-5
+          md:p-6
+        "
+      >
+        {!selectedEvidence ? (
+          <div
+            className="
+              flex
+              min-h-[520px]
+              items-center
+              justify-center
+              text-center
+            "
+          >
+            <div>
+              <Fingerprint
+                size={36}
+                className="
+                  mx-auto
+                  text-white/20
+                "
+              />
+
+              <h3
+                className="
+                  mt-5
+                  text-lg
+                  font-medium
+                "
+              >
+                Select evidence
+              </h3>
+
+              <p
+                className="
+                  mx-auto
+                  mt-2
+                  max-w-sm
+                  text-sm
+                  leading-6
+                  text-white/25
+                "
+              >
+                TRACE-X will compare
+                the stored file with
+                PostgreSQL and then
+                compare its
+                cryptographic
+                fingerprint with the
+                blockchain anchor.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className="
+                flex
+                flex-col
+                gap-4
+                sm:flex-row
+                sm:items-start
+                sm:justify-between
+              "
+            >
+              <div>
+                <p
+                  className="
+                    text-xs
+                    text-white/25
+                  "
+                >
+                  {
+                    selectedEvidence.id
+                  }
+                </p>
+
+                <h3
+                  className="
+                    mt-2
+                    break-all
+                    text-xl
+                    font-medium
+                  "
+                >
+                  {
+                    selectedEvidence.name
+                  }
+                </h3>
+
+                <p
+                  className="
+                    mt-2
+                    text-xs
+                    text-white/25
+                  "
+                >
+                  {
+                    selectedEvidence.caseTitle
+                  }
+                </p>
+              </div>
+
+              <div
+                className="
+                  flex
+                  flex-wrap
+                  gap-2
+                "
+              >
+                <IntegrityBadge
+                  integrity={
+                    selectedEvidence.integrity
+                  }
+                />
+
+                <BlockchainBadge
+                  status={
+                    selectedEvidence.blockchainStatus
+                  }
+                />
+              </div>
+            </div>
+
+            <Divider />
+
+            <p
+              className="
+                text-xs
+                text-white/25
+              "
+            >
+              POSTGRESQL SHA-256
+            </p>
+
+            <div
+              className="
+                mt-3
+                rounded-[20px]
+                border
+                border-white/[0.07]
+                bg-black/20
+                p-4
+              "
+            >
+              <p
+                className="
+                  break-all
+                  font-mono
+                  text-[11px]
+                  leading-5
+                  text-white/45
+                "
+              >
+                {
+                  selectedEvidence.hash
+                }
+              </p>
+            </div>
+
+            {selectedEvidence.blockchainStatus ===
+              "Failed" && (
+              <button
+                type="button"
+                disabled={
+                  retrying
+                }
+                onClick={() =>
+                  void retryAnchor()
+                }
+                className="
+                  mt-4
+                  flex
+                  h-11
+                  w-full
+                  items-center
+                  justify-center
+                  gap-2
+                  rounded-2xl
+                  border
+                  border-amber-400/15
+                  bg-amber-400/[0.06]
+                  text-sm
+                  text-amber-100
+                  disabled:opacity-40
+                "
+              >
+                {retrying ? (
+                  <LoaderCircle
+                    size={16}
+                    className="
+                      animate-spin
+                    "
+                  />
+                ) : (
+                  <RefreshCw
+                    size={16}
+                  />
+                )}
+
+                Retry Blockchain Anchor
+              </button>
+            )}
+
+            <motion.button
+              type="button"
+              disabled={
+                verifying
+              }
+              whileHover={
+                verifying
+                  ? {}
+                  : {
+                      scale:
+                        1.01,
+                    }
+              }
+              whileTap={
+                verifying
+                  ? {}
+                  : {
+                      scale:
+                        0.98,
+                    }
+              }
+              onClick={() =>
+                void verify()
+              }
+              className="
+                mt-5
+                flex
+                h-12
+                w-full
+                items-center
+                justify-center
+                gap-2
+                rounded-2xl
+                bg-white
+                text-sm
+                font-semibold
+                text-black
+                disabled:opacity-40
+              "
+            >
+              {verifying ? (
+                <>
+                  <LoaderCircle
+                    size={17}
+                    className="
+                      animate-spin
+                    "
+                  />
+
+                  Running integrity
+                  checks...
+                </>
+              ) : (
+                <>
+                  <ScanSearch
+                    size={17}
+                  />
+
+                  Verify Evidence
+                </>
+              )}
+            </motion.button>
+
+            {error && (
+              <div
+                className="
+                  mt-5
+                "
+              >
+                <FormError
+                  message={
+                    error
+                  }
+                />
+              </div>
+            )}
+
+            {result && (
+              <DualVerificationResult
+                result={
+                  result
+                }
+              />
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   DUAL VERIFICATION RESULT
+========================================================= */
+
+function DualVerificationResult({
+  result,
+}: {
+  result:
+    VerifyEvidenceResponse
+}) {
+  return (
+    <motion.div
+      initial={{
+        opacity:
+          0,
+
+        y:
+          12,
+      }}
+      animate={{
+        opacity:
+          1,
+
+        y:
+          0,
+      }}
+      className="
+        mt-6
+        space-y-4
+      "
+    >
+      <div
+        className="
+          rounded-[24px]
+          border
+          border-white/[0.07]
+          bg-white/[0.025]
+          p-5
+        "
+      >
+        <div
+          className="
+            flex
+            items-center
+            justify-between
+            gap-4
+          "
+        >
+          <div
+            className="
+              flex
+              items-center
+              gap-3
+            "
+          >
+            {result.fileVerification
+              .verified ? (
+              <ShieldCheck
+                size={22}
+                className="
+                  text-emerald-300
+                "
+              />
+            ) : (
+              <ShieldAlert
+                size={22}
+                className="
+                  text-red-300
+                "
+              />
+            )}
+
+            <div>
+              <p
+                className="
+                  text-sm
+                  font-medium
+                "
+              >
+                File Integrity
+              </p>
+
+              <p
+                className="
+                  mt-1
+                  text-xs
+                  text-white/25
+                "
+              >
+                Stored file vs
+                PostgreSQL
+              </p>
+            </div>
+          </div>
+
+          <ResultBadge
+            verified={
+              result.fileVerification
+                .verified
+            }
+          />
+        </div>
+
+        <div
+          className="
+            mt-5
+            space-y-4
+          "
+        >
+          <HashResult
+            label="DATABASE SHA-256"
+            hash={
+              result.fileVerification
+                .databaseHash
+            }
+          />
+
+          <HashResult
+            label="CURRENT FILE SHA-256"
+            hash={
+              result.fileVerification
+                .currentFileHash
+            }
+          />
+        </div>
+      </div>
+
+      <div
+        className="
+          rounded-[24px]
+          border
+          border-white/[0.07]
+          bg-white/[0.025]
+          p-5
+        "
+      >
+        <div
+          className="
+            flex
+            items-center
+            justify-between
+            gap-4
+          "
+        >
+          <div
+            className="
+              flex
+              items-center
+              gap-3
+            "
+          >
+            <Blocks
+              size={22}
+              className="
+                text-blue-300
+              "
+            />
+
+            <div>
+              <p
+                className="
+                  text-sm
+                  font-medium
+                "
+              >
+                Blockchain Integrity
+              </p>
+
+              <p
+                className="
+                  mt-1
+                  text-xs
+                  text-white/25
+                "
+              >
+                Smart-contract
+                comparison
+              </p>
+            </div>
+          </div>
+
+          <BlockchainBadge
+            status={
+              result.blockchain.status
+            }
+          />
+        </div>
+
+        {result.blockchain.checked ? (
+          <div
+            className="
+              mt-5
+              grid
+              gap-3
+              sm:grid-cols-2
+            "
+          >
+            <VerificationCheckCard
+              label="DATABASE HASH"
+              verified={
+                result.blockchain
+                  .databaseHashVerified
+              }
+            />
+
+            <VerificationCheckCard
+              label="CURRENT FILE HASH"
+              verified={
+                result.blockchain
+                  .currentFileHashVerified
+              }
+            />
+          </div>
+        ) : (
+          <div
+            className="
+              mt-5
+              rounded-[18px]
+              border
+              border-amber-400/10
+              bg-amber-400/[0.04]
+              p-4
+            "
+          >
+            <p
+              className="
+                text-xs
+                leading-5
+                text-amber-100/60
+              "
+            >
+              Blockchain verification
+              was not completed.
+            </p>
+
+            {result.blockchain.error && (
+              <p
+                className="
+                  mt-2
+                  text-xs
+                  leading-5
+                  text-white/25
+                "
+              >
+                {
+                  result.blockchain.error
+                }
+              </p>
+            )}
+          </div>
+        )}
+
+        <div
+          className="
+            mt-5
+            grid
+            gap-3
+            sm:grid-cols-2
+          "
+        >
+          <BlockchainField
+            label="VERSION"
+            value={
+              result.blockchain.version ===
+              null
+                ? "—"
+                : String(
+                    result.blockchain.version,
+                  )
+            }
+          />
+
+          <BlockchainField
+            label="BLOCK"
+            value={
+              result.blockchain.blockNumber ===
+              null
+                ? "—"
+                : String(
+                    result.blockchain.blockNumber,
+                  )
+            }
+          />
+        </div>
+
+        {result.blockchain.transactionHash && (
+          <LongValue
+            label="TRANSACTION"
+            value={
+              result.blockchain.transactionHash
+            }
+          />
+        )}
+
+        {result.blockchain.contractAddress && (
+          <LongValue
+            label="CONTRACT"
+            value={
+              result.blockchain.contractAddress
+            }
+          />
+        )}
+
+        {result.blockchain.evidenceKey && (
+          <LongValue
+            label="OPAQUE EVIDENCE KEY"
+            value={
+              result.blockchain.evidenceKey
+            }
+          />
+        )}
+      </div>
+
+      <VerificationExplanation
+        fileVerified={
+          result.fileVerification
+            .verified
+        }
+        databaseHashVerified={
+          result.blockchain
+            .databaseHashVerified
+        }
+        currentHashVerified={
+          result.blockchain
+            .currentFileHashVerified
+        }
+        blockchainChecked={
+          result.blockchain.checked
+        }
+      />
+    </motion.div>
+  )
+}
+
+function VerificationExplanation({
+  fileVerified,
+  databaseHashVerified,
+  currentHashVerified,
+  blockchainChecked,
+}: {
+  fileVerified: boolean
+
+  databaseHashVerified:
+    boolean | null
+
+  currentHashVerified:
+    boolean | null
+
+  blockchainChecked:
+    boolean
+}) {
+  let message =
+    "Blockchain verification is unavailable or the evidence is not anchored."
+
+  if (
+    blockchainChecked &&
+    fileVerified &&
+    databaseHashVerified &&
+    currentHashVerified
+  ) {
+    message =
+      "The stored file, PostgreSQL SHA-256 and blockchain anchor all agree."
+  } else if (
+    blockchainChecked &&
+    !fileVerified &&
+    databaseHashVerified &&
+    !currentHashVerified
+  ) {
+    message =
+      "The PostgreSQL hash still matches the blockchain anchor, but the stored evidence file has changed."
+  } else if (
+    blockchainChecked &&
+    !fileVerified &&
+    !databaseHashVerified &&
+    currentHashVerified
+  ) {
+    message =
+      "The current file still matches the blockchain anchor, but the PostgreSQL hash does not."
+  } else if (
+    blockchainChecked &&
+    fileVerified &&
+    !databaseHashVerified &&
+    !currentHashVerified
+  ) {
+    message =
+      "The file and PostgreSQL agree with each other, but they no longer match the original blockchain anchor."
+  } else if (
+    blockchainChecked
+  ) {
+    message =
+      "One or more integrity comparisons failed. Review the individual checks before trusting this evidence state."
+  }
+
+  return (
+    <div
+      className="
+        rounded-[22px]
+        border
+        border-blue-400/10
+        bg-blue-400/[0.035]
+        p-4
+      "
+    >
+      <div
+        className="
+          flex
+          items-start
+          gap-3
+        "
+      >
+        <Fingerprint
+          size={17}
+          className="
+            mt-0.5
+            shrink-0
+            text-blue-300
+          "
+        />
+
+        <p
+          className="
+            text-xs
+            leading-5
+            text-white/35
+          "
+        >
+          {message}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function VerificationCheckCard({
+  label,
+  verified,
+}: {
+  label: string
+
+  verified:
+    boolean | null
+}) {
+  return (
+    <div
+      className="
+        rounded-[18px]
+        border
+        border-white/[0.06]
+        bg-black/15
+        p-4
+      "
+    >
+      <p
+        className="
+          text-[10px]
+          text-white/20
+        "
+      >
+        {label}
+      </p>
+
+      <div
+        className="
+          mt-3
+          flex
+          items-center
+          gap-2
+        "
+      >
+        {verified ===
+        true ? (
+          <>
+            <CheckCircle2
+              size={15}
+              className="
+                text-emerald-300
+              "
+            />
+
+            <span
+              className="
+                text-xs
+                text-emerald-200
+              "
+            >
+              Matches blockchain
+            </span>
+          </>
+        ) : verified ===
+          false ? (
+          <>
+            <CircleAlert
+              size={15}
+              className="
+                text-red-300
+              "
+            />
+
+            <span
+              className="
+                text-xs
+                text-red-200
+              "
+            >
+              Mismatch
+            </span>
+          </>
+        ) : (
+          <>
+            <Clock3
+              size={15}
+              className="
+                text-white/30
+              "
+            />
+
+            <span
+              className="
+                text-xs
+                text-white/30
+              "
+            >
+              Not checked
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ResultBadge({
+  verified,
+}: {
+  verified: boolean
+}) {
+  return (
+    <span
+      className={`
+        inline-flex
+        items-center
+        gap-1.5
+        rounded-full
+        border
+        px-2.5
+        py-1
+        text-[10px]
+
+        ${
+          verified
+            ? "border-emerald-400/15 bg-emerald-400/[0.06] text-emerald-200/70"
+            : "border-red-400/15 bg-red-400/[0.06] text-red-200/75"
+        }
+      `}
+    >
+      {verified ? (
+        <ShieldCheck
+          size={11}
+        />
+      ) : (
+        <ShieldAlert
+          size={11}
+        />
+      )}
+
+      {verified
+        ? "Verified"
+        : "Mismatch"}
+    </span>
+  )
+}
+
+function HashResult({
+  label,
+  hash,
+}: {
+  label: string
+  hash: string
+}) {
+  return (
+    <div>
+      <p
+        className="
+          text-[10px]
+          text-white/25
+        "
+      >
+        {label}
+      </p>
+
+      <p
+        className="
+          mt-2
+          break-all
+          font-mono
+          text-[10px]
+          leading-5
+          text-white/45
+        "
+      >
+        {hash}
+      </p>
+    </div>
   )
 }
 
@@ -4905,10 +5932,10 @@ function LoginScreen({
               text-white/35
             "
           >
-            Secure digital
-            evidence management
-            and integrity
-            verification.
+            Blockchain-backed
+            digital evidence
+            integrity and
+            chain-of-custody.
           </p>
 
           <form
@@ -5070,6 +6097,7 @@ function SearchBox({
           bg-transparent
           text-sm
           text-white
+          outline-none
           placeholder:text-white/20
         "
       />
@@ -5319,7 +6347,65 @@ function IntegrityBadge({
         />
       )}
 
-      {integrity}
+      File {integrity}
+    </span>
+  )
+}
+
+function BlockchainBadge({
+  status,
+}: {
+  status:
+    BlockchainAnchorStatus
+}) {
+  const style =
+    status ===
+    "Anchored"
+      ? "border-blue-400/15 bg-blue-400/[0.07] text-blue-200/75"
+      : status ===
+        "Failed"
+      ? "border-red-400/15 bg-red-400/[0.06] text-red-200/75"
+      : status ===
+        "Pending"
+      ? "border-amber-400/15 bg-amber-400/[0.06] text-amber-200/70"
+      : "border-white/10 bg-white/[0.04] text-white/35"
+
+  return (
+    <span
+      className={`
+        inline-flex
+        items-center
+        gap-1.5
+        rounded-full
+        border
+        px-2.5
+        py-1
+        text-[10px]
+        ${style}
+      `}
+    >
+      {status ===
+      "Anchored" ? (
+        <Link2
+          size={11}
+        />
+      ) : status ===
+        "Failed" ? (
+        <CircleAlert
+          size={11}
+        />
+      ) : status ===
+        "Pending" ? (
+        <Clock3
+          size={11}
+        />
+      ) : (
+        <Blocks
+          size={11}
+        />
+      )}
+
+      {status}
     </span>
   )
 }
@@ -5925,12 +7011,6 @@ async function requestJson<T>(
       options.headers,
     )
 
-  /*
-   * IMPORTANT:
-   * Never manually set multipart/form-data Content-Type
-   * when using FormData. The browser must generate the
-   * boundary value automatically.
-   */
   const isFormData =
     options.body instanceof
     FormData
@@ -5962,7 +7042,7 @@ async function requestJson<T>(
       )
   } catch {
     throw new Error(
-      "Could not reach the TRACE-X backend. Make sure server\\npm run dev is running.",
+      "Could not reach the TRACE-X backend. Make sure npm run dev is running inside the server folder.",
     )
   }
 
@@ -5987,6 +7067,7 @@ async function requestJson<T>(
 
     throw new Error(
       apiError?.message ||
+        apiError?.blockchainError ||
         `TRACE-X API returned HTTP ${response.status}.`,
     )
   }
@@ -6197,6 +7278,7 @@ const inputClass = `
   px-4
   text-sm
   text-white
+  outline-none
   placeholder:text-white/20
   transition
   focus:border-white/25
@@ -6215,6 +7297,7 @@ const textareaClass = `
   text-sm
   leading-6
   text-white
+  outline-none
   placeholder:text-white/20
   transition
   focus:border-white/25
@@ -6231,6 +7314,7 @@ const selectClass = `
   px-4
   text-sm
   text-white
+  outline-none
 `
 
 export default App

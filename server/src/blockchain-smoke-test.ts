@@ -6,6 +6,7 @@ import {
 
 import {
   anchorEvidenceOnBlockchain,
+  blockchainProvider,
   getBlockchainStatus,
   verifyEvidenceOnBlockchain,
 } from "./blockchain"
@@ -287,21 +288,12 @@ run()
     },
   )
   .finally(
-    async () => {
+    () => {
       /*
        * JsonRpcProvider uses background resources.
        * Destroying it lets this standalone script terminate
        * cleanly when the smoke test finishes.
        */
-
-      const {
-        blockchainProvider,
-      } =
-        await import(
-          "./blockchain"
-        )
-
-      blockchainProvider
-        .destroy()
+      blockchainProvider.destroy()
     },
   )
