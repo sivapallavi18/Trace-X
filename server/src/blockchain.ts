@@ -95,6 +95,12 @@ export type BlockchainCustodyResult = {
   writerAddress: string
 }
 
+type BlockchainRuntime = {
+  chainId: bigint
+  blockNumber: number
+  contractAddress: string
+}
+
 /* =========================================================
    PROVIDER
 ========================================================= */
@@ -186,25 +192,122 @@ export function createEvidenceKey(
 }
 
 /* =========================================================
+   BLOCKCHAIN RUNTIME CHECK
+
+   Every read/write now validates:
+   1. RPC connection
+   2. Expected chain ID
+   3. Current contract address
+   4. Contract bytecode actually exists
+
+   This prevents opaque ethers BAD_DATA errors after a
+   local Hardhat node is restarted.
+========================================================= */
+
+async function assertBlockchainReady():
+  Promise<BlockchainRuntime> {
+  let network
+
+  try {
+    network =
+      await blockchainProvider
+        .getNetwork()
+  } catch (error) {
+    throw new Error(
+      `TRACE-X cannot connect to the blockchain RPC at ${BLOCKCHAIN_RPC_URL}. Make sure the Hardhat node is running. Original error: ${
+        error instanceof Error
+          ? error.message
+          : "unknown RPC error"
+      }`,
+    )
+  }
+
+  if (
+    network.chainId !==
+    EXPECTED_CHAIN_ID
+  ) {
+    throw new Error(
+      `TRACE-X expected blockchain chain ID ${EXPECTED_CHAIN_ID.toString()}, but the connected network reports ${network.chainId.toString()}.`,
+    )
+  }
+
+  const contractAddress =
+    getContractAddress()
+
+  let contractCode:
+    string
+
+  try {
+    contractCode =
+      await blockchainProvider
+        .getCode(
+          contractAddress,
+        )
+  } catch (error) {
+    throw new Error(
+      `TRACE-X could not inspect the smart contract at ${contractAddress}. Original error: ${
+        error instanceof Error
+          ? error.message
+          : "unknown blockchain error"
+      }`,
+    )
+  }
+
+  if (
+    contractCode ===
+    "0x"
+  ) {
+    throw new Error(
+      `TRACE-X smart contract is not deployed at ${contractAddress} on the currently running blockchain. The local Hardhat node may have been restarted, which clears its temporary blockchain state. Redeploy the TRACE-X contract and update BLOCKCHAIN_CONTRACT_ADDRESS if necessary.`,
+    )
+  }
+
+  const blockNumber =
+    await blockchainProvider
+      .getBlockNumber()
+
+  return {
+    chainId:
+      network.chainId,
+
+    blockNumber,
+
+    contractAddress,
+  }
+}
+
+/* =========================================================
    CONTRACT HELPERS
 ========================================================= */
 
-function getReadContract() {
-  return new Contract(
-    getContractAddress(),
-    TRACE_X_REGISTRY_ABI,
-    blockchainProvider,
-  )
+async function getReadContract() {
+  const runtime =
+    await assertBlockchainReady()
+
+  const contract =
+    new Contract(
+      runtime.contractAddress,
+      TRACE_X_REGISTRY_ABI,
+      blockchainProvider,
+    )
+
+  return {
+    contract,
+    runtime,
+  }
 }
 
 async function getWriteContract() {
+  const runtime =
+    await assertBlockchainReady()
+
   const signer =
     await blockchainProvider
       .getSigner(0)
 
   const contract =
     new Contract(
-      getContractAddress(),
+      runtime.contractAddress,
       TRACE_X_REGISTRY_ABI,
       signer,
     )
@@ -212,6 +315,7 @@ async function getWriteContract() {
   return {
     signer,
     contract,
+    runtime,
   }
 }
 
@@ -221,55 +325,23 @@ async function getWriteContract() {
 
 export async function getBlockchainStatus():
   Promise<BlockchainStatus> {
-  const network =
+  const runtime =
+    await assertBlockchainReady()
+
+  const signer =
     await blockchainProvider
-      .getNetwork()
-
-  if (
-    network.chainId !==
-    EXPECTED_CHAIN_ID
-  ) {
-    throw new Error(
-      `TRACE-X expected chain ID ${EXPECTED_CHAIN_ID.toString()} but connected to ${network.chainId.toString()}.`,
-    )
-  }
-
-  const blockNumber =
-    await blockchainProvider
-      .getBlockNumber()
-
-  const contractAddress =
-    getContractAddress()
-
-  const contractCode =
-    await blockchainProvider
-      .getCode(
-        contractAddress,
-      )
-
-  const contractDeployed =
-    contractCode !==
-    "0x"
-
-  if (
-    !contractDeployed
-  ) {
-    throw new Error(
-      `No smart contract code exists at ${contractAddress}. Make sure the TRACE-X contract is deployed to the currently running Hardhat node.`,
-    )
-  }
-
-  const {
-    signer,
-  } =
-    await getWriteContract()
+      .getSigner(0)
 
   const writerAddress =
     await signer
       .getAddress()
 
   const contract =
-    getReadContract()
+    new Contract(
+      runtime.contractAddress,
+      TRACE_X_REGISTRY_ABI,
+      blockchainProvider,
+    )
 
   const writerAuthorized =
     await contract
@@ -285,14 +357,17 @@ export async function getBlockchainStatus():
       BLOCKCHAIN_RPC_URL,
 
     chainId:
-      network.chainId
+      runtime.chainId
         .toString(),
 
-    blockNumber,
+    blockNumber:
+      runtime.blockNumber,
 
-    contractAddress,
+    contractAddress:
+      runtime.contractAddress,
 
-    contractDeployed,
+    contractDeployed:
+      true,
 
     writerAddress,
 
@@ -321,6 +396,7 @@ export async function anchorEvidenceOnBlockchain(
   const {
     signer,
     contract,
+    runtime,
   } =
     await getWriteContract()
 
@@ -389,7 +465,7 @@ export async function anchorEvidenceOnBlockchain(
       receipt.blockNumber,
 
     contractAddress:
-      getContractAddress(),
+      runtime.contractAddress,
 
     writerAddress,
   }
@@ -397,6 +473,13 @@ export async function anchorEvidenceOnBlockchain(
 
 /* =========================================================
    EVIDENCE BLOCKCHAIN VERIFICATION
+
+   Important:
+   PostgreSQL may still contain an old blockchain version
+   after a local Hardhat blockchain has been reset.
+
+   Before comparing hashes, TRACE-X checks that the expected
+   version actually exists on the current smart contract.
 ========================================================= */
 
 export async function verifyEvidenceOnBlockchain(
@@ -425,8 +508,31 @@ export async function verifyEvidenceOnBlockchain(
       sha256Hash,
     )
 
-  const contract =
-    getReadContract()
+  const {
+    contract,
+    runtime,
+  } =
+    await getReadContract()
+
+  const latestVersionValue =
+    await contract
+      .latestVersion(
+        evidenceKey,
+      )
+
+  const latestVersion =
+    Number(
+      latestVersionValue,
+    )
+
+  if (
+    latestVersion <
+    version
+  ) {
+    throw new Error(
+      `Blockchain anchor state is stale or unavailable for ${evidenceId}. PostgreSQL expects blockchain version ${version}, but the currently running TRACE-X contract reports latest version ${latestVersion}. This commonly occurs after restarting the local Hardhat node because its development blockchain state is temporary.`,
+    )
+  }
 
   const verified =
     await contract
@@ -449,7 +555,7 @@ export async function verifyEvidenceOnBlockchain(
     verified,
 
     contractAddress:
-      getContractAddress(),
+      runtime.contractAddress,
   }
 }
 
@@ -465,8 +571,10 @@ export async function getBlockchainCustodyCount(
       evidenceId,
     )
 
-  const contract =
-    getReadContract()
+  const {
+    contract,
+  } =
+    await getReadContract()
 
   const count =
     await contract
@@ -526,6 +634,7 @@ export async function recordCustodyEventOnBlockchain(
   const {
     signer,
     contract,
+    runtime,
   } =
     await getWriteContract()
 
@@ -559,15 +668,16 @@ export async function recordCustodyEventOnBlockchain(
     evidenceVersion <= 0
   ) {
     throw new Error(
-      "Evidence must be blockchain anchored before custody events can be recorded.",
+      `No blockchain evidence anchor exists for ${evidenceId} on the currently running TRACE-X contract. PostgreSQL may contain an anchor from an earlier Hardhat session. Local Hardhat blockchain state is temporary and is erased when the node is restarted.`,
     )
   }
 
   /*
-   * This protects custody ordering.
+   * Protect custody ordering.
    *
-   * If DB says this is custody event #3, the blockchain
-   * must currently contain exactly two custody events.
+   * If PostgreSQL says this should be custody event #3,
+   * the blockchain must currently contain exactly two
+   * custody events.
    */
   const currentBlockchainCount =
     Number(
@@ -585,7 +695,7 @@ export async function recordCustodyEventOnBlockchain(
     expectedPreviousCount
   ) {
     throw new Error(
-      `Custody sequence mismatch. TRACE-X expected blockchain custody count ${expectedPreviousCount}, but the contract reports ${currentBlockchainCount}. Manual reconciliation is required before retrying.`,
+      `Custody blockchain state is inconsistent for ${evidenceId}. TRACE-X expected ${expectedPreviousCount} existing custody event(s), but the current contract reports ${currentBlockchainCount}. This may indicate that the local blockchain was restarted or that PostgreSQL and blockchain state require reconciliation.`,
     )
   }
 
@@ -646,7 +756,7 @@ export async function recordCustodyEventOnBlockchain(
       receipt.blockNumber,
 
     contractAddress:
-      getContractAddress(),
+      runtime.contractAddress,
 
     writerAddress,
   }
