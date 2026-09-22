@@ -28,8 +28,6 @@ const CONTRACT_ADDRESS =
 
 /* =========================================================
    MINIMAL TRACE-X CONTRACT ABI
-
-   We only include functions the backend currently needs.
 ========================================================= */
 
 const TRACE_X_REGISTRY_ABI = [
@@ -46,6 +44,8 @@ const TRACE_X_REGISTRY_ABI = [
   "function getAnchor(bytes32 evidenceKey, uint32 version) view returns (bytes32 sha256Hash, uint64 anchoredAt, address anchoredBy)",
 
   "function custodyEventCount(bytes32 evidenceKey) view returns (uint64)",
+
+  "function recordCustodyEvent(bytes32 evidenceKey, uint8 actionCode, bytes32 eventDigest) returns (uint64 sequence)",
 ] as const
 
 /* =========================================================
@@ -83,6 +83,18 @@ export type BlockchainVerificationResult = {
   contractAddress: string
 }
 
+export type BlockchainCustodyResult = {
+  evidenceId: string
+  evidenceKey: string
+  sequence: number
+  actionCode: number
+  eventDigest: string
+  transactionHash: string
+  blockNumber: number
+  contractAddress: string
+  writerAddress: string
+}
+
 /* =========================================================
    PROVIDER
 ========================================================= */
@@ -113,13 +125,18 @@ function getContractAddress() {
   )
 }
 
-function normalizeSHA256(
-  sha256Hash: string,
+function normalizeBytes32Hex(
+  value: string,
+  label: string,
 ) {
   const normalized =
-    sha256Hash
+    value
       .trim()
       .toLowerCase()
+      .replace(
+        /^0x/,
+        "",
+      )
 
   if (
     !/^[0-9a-f]{64}$/.test(
@@ -127,25 +144,24 @@ function normalizeSHA256(
     )
   ) {
     throw new Error(
-      "TRACE-X blockchain anchoring requires a valid 64-character SHA-256 hash.",
+      `${label} must be a valid 32-byte hexadecimal value.`,
     )
   }
 
   return `0x${normalized}`
 }
 
+function normalizeSHA256(
+  sha256Hash: string,
+) {
+  return normalizeBytes32Hex(
+    sha256Hash,
+    "SHA-256 hash",
+  )
+}
+
 /* =========================================================
-   EVIDENCE IDENTIFIER
-
-   We don't put the raw TRACE-X evidence ID on-chain.
-
-   EV-2026-0125
-        │
-        ▼
-   keccak256(UTF-8 bytes)
-        │
-        ▼
-   bytes32 evidenceKey
+   EVIDENCE KEY
 ========================================================= */
 
 export function createEvidenceKey(
@@ -170,7 +186,7 @@ export function createEvidenceKey(
 }
 
 /* =========================================================
-   READ-ONLY CONTRACT
+   CONTRACT HELPERS
 ========================================================= */
 
 function getReadContract() {
@@ -180,19 +196,6 @@ function getReadContract() {
     blockchainProvider,
   )
 }
-
-/* =========================================================
-   WRITABLE CONTRACT
-
-   For our LOCAL Hardhat blockchain we use account 0 exposed
-   by the development JSON-RPC node.
-
-   We are deliberately NOT placing a development private key
-   inside TRACE-X's source code.
-
-   For a real deployment later, this will be replaced by a
-   proper protected signer/wallet.
-========================================================= */
 
 async function getWriteContract() {
   const signer =
@@ -298,7 +301,7 @@ export async function getBlockchainStatus():
 }
 
 /* =========================================================
-   ANCHOR EVIDENCE SHA-256
+   EVIDENCE SHA-256 ANCHOR
 ========================================================= */
 
 export async function anchorEvidenceOnBlockchain(
@@ -393,7 +396,7 @@ export async function anchorEvidenceOnBlockchain(
 }
 
 /* =========================================================
-   VERIFY AGAINST BLOCKCHAIN
+   EVIDENCE BLOCKCHAIN VERIFICATION
 ========================================================= */
 
 export async function verifyEvidenceOnBlockchain(
@@ -447,5 +450,204 @@ export async function verifyEvidenceOnBlockchain(
 
     contractAddress:
       getContractAddress(),
+  }
+}
+
+/* =========================================================
+   CURRENT CUSTODY EVENT COUNT
+========================================================= */
+
+export async function getBlockchainCustodyCount(
+  evidenceId: string,
+) {
+  const evidenceKey =
+    createEvidenceKey(
+      evidenceId,
+    )
+
+  const contract =
+    getReadContract()
+
+  const count =
+    await contract
+      .custodyEventCount(
+        evidenceKey,
+      )
+
+  return Number(
+    count,
+  )
+}
+
+/* =========================================================
+   CUSTODY EVENT ANCHOR
+========================================================= */
+
+export async function recordCustodyEventOnBlockchain(
+  evidenceId: string,
+  expectedSequence: number,
+  actionCode: number,
+  eventDigest: string,
+): Promise<BlockchainCustodyResult> {
+  if (
+    !Number.isInteger(
+      expectedSequence,
+    ) ||
+    expectedSequence <= 0
+  ) {
+    throw new Error(
+      "Custody sequence must be a positive integer.",
+    )
+  }
+
+  if (
+    !Number.isInteger(
+      actionCode,
+    ) ||
+    actionCode < 1 ||
+    actionCode > 6
+  ) {
+    throw new Error(
+      "Custody action code must be between 1 and 6.",
+    )
+  }
+
+  const evidenceKey =
+    createEvidenceKey(
+      evidenceId,
+    )
+
+  const blockchainDigest =
+    normalizeBytes32Hex(
+      eventDigest,
+      "Custody event digest",
+    )
+
+  const {
+    signer,
+    contract,
+  } =
+    await getWriteContract()
+
+  const writerAddress =
+    await signer
+      .getAddress()
+
+  const authorized =
+    await contract
+      .authorizedWriters(
+        writerAddress,
+      ) as boolean
+
+  if (
+    !authorized
+  ) {
+    throw new Error(
+      `Blockchain writer ${writerAddress} is not authorized by the TRACE-X smart contract.`,
+    )
+  }
+
+  const evidenceVersion =
+    Number(
+      await contract
+        .latestVersion(
+          evidenceKey,
+        ),
+    )
+
+  if (
+    evidenceVersion <= 0
+  ) {
+    throw new Error(
+      "Evidence must be blockchain anchored before custody events can be recorded.",
+    )
+  }
+
+  /*
+   * This protects custody ordering.
+   *
+   * If DB says this is custody event #3, the blockchain
+   * must currently contain exactly two custody events.
+   */
+  const currentBlockchainCount =
+    Number(
+      await contract
+        .custodyEventCount(
+          evidenceKey,
+        ),
+    )
+
+  const expectedPreviousCount =
+    expectedSequence - 1
+
+  if (
+    currentBlockchainCount !==
+    expectedPreviousCount
+  ) {
+    throw new Error(
+      `Custody sequence mismatch. TRACE-X expected blockchain custody count ${expectedPreviousCount}, but the contract reports ${currentBlockchainCount}. Manual reconciliation is required before retrying.`,
+    )
+  }
+
+  const transaction =
+    await contract
+      .recordCustodyEvent(
+        evidenceKey,
+        actionCode,
+        blockchainDigest,
+      )
+
+  const receipt:
+    TransactionReceipt | null =
+      await transaction.wait()
+
+  if (
+    !receipt
+  ) {
+    throw new Error(
+      "Custody blockchain transaction was submitted but no transaction receipt was returned.",
+    )
+  }
+
+  const blockchainSequence =
+    Number(
+      await contract
+        .custodyEventCount(
+          evidenceKey,
+        ),
+    )
+
+  if (
+    blockchainSequence !==
+    expectedSequence
+  ) {
+    throw new Error(
+      `Custody blockchain sequence ${blockchainSequence} did not match TRACE-X sequence ${expectedSequence}.`,
+    )
+  }
+
+  return {
+    evidenceId,
+
+    evidenceKey,
+
+    sequence:
+      blockchainSequence,
+
+    actionCode,
+
+    eventDigest:
+      blockchainDigest,
+
+    transactionHash:
+      receipt.hash,
+
+    blockNumber:
+      receipt.blockNumber,
+
+    contractAddress:
+      getContractAddress(),
+
+    writerAddress,
   }
 }

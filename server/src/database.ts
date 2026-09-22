@@ -41,10 +41,6 @@ export const database =
       5000,
   })
 
-/* =========================================================
-   POOL ERROR
-========================================================= */
-
 database.on(
   "error",
   (error) => {
@@ -56,7 +52,7 @@ database.on(
 )
 
 /* =========================================================
-   TEST DATABASE CONNECTION
+   CONNECTION TEST
 ========================================================= */
 
 export async function testDatabaseConnection() {
@@ -83,7 +79,7 @@ export async function testDatabaseConnection() {
 }
 
 /* =========================================================
-   INITIALIZE TRACE-X DATABASE
+   DATABASE INITIALIZATION
 ========================================================= */
 
 export async function initializeDatabase() {
@@ -271,7 +267,7 @@ export async function initializeDatabase() {
     `)
 
     /* -----------------------------------------------------
-       MIGRATE OLDER TRACE-X DATABASES
+       MIGRATE EXISTING EVIDENCE TABLE
     ----------------------------------------------------- */
 
     await client.query(`
@@ -429,6 +425,150 @@ export async function initializeDatabase() {
     `)
 
     /* -----------------------------------------------------
+       CHAIN OF CUSTODY EVENTS
+    ----------------------------------------------------- */
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS custody_events (
+        id BIGSERIAL PRIMARY KEY,
+
+        evidence_id TEXT NOT NULL
+          REFERENCES evidence(id)
+          ON DELETE CASCADE,
+
+        sequence INTEGER NOT NULL
+          CHECK (
+            sequence > 0
+          ),
+
+        action_code SMALLINT NOT NULL
+          CHECK (
+            action_code BETWEEN 1 AND 6
+          ),
+
+        action TEXT NOT NULL
+          CHECK (
+            action IN (
+              'REGISTERED',
+              'TRANSFERRED',
+              'RECEIVED',
+              'VERIFIED',
+              'SEALED',
+              'ARCHIVED'
+            )
+          ),
+
+        from_custodian TEXT,
+
+        to_custodian TEXT,
+
+        reason TEXT NOT NULL,
+
+        event_digest VARCHAR(64) NOT NULL
+          CHECK (
+            event_digest ~ '^[0-9a-f]{64}$'
+          ),
+
+        blockchain_status TEXT NOT NULL
+          DEFAULT 'Pending'
+          CHECK (
+            blockchain_status IN (
+              'Not Anchored',
+              'Pending',
+              'Anchored',
+              'Failed'
+            )
+          ),
+
+        blockchain_sequence BIGINT,
+
+        blockchain_tx_hash TEXT,
+
+        blockchain_block_number BIGINT,
+
+        blockchain_contract_address TEXT,
+
+        blockchain_evidence_key TEXT,
+
+        blockchain_error TEXT,
+
+        occurred_at TIMESTAMPTZ
+          NOT NULL,
+
+        created_at TIMESTAMPTZ
+          NOT NULL
+          DEFAULT NOW(),
+
+        UNIQUE (
+          evidence_id,
+          sequence
+        )
+      )
+    `)
+
+    /* -----------------------------------------------------
+       APPEND-ONLY AUDIT LOG
+    ----------------------------------------------------- */
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id BIGSERIAL PRIMARY KEY,
+
+        event_type TEXT NOT NULL,
+
+        evidence_id TEXT
+          REFERENCES evidence(id)
+          ON DELETE SET NULL,
+
+        case_id TEXT
+          REFERENCES cases(id)
+          ON DELETE SET NULL,
+
+        actor TEXT NOT NULL,
+
+        details JSONB NOT NULL
+          DEFAULT '{}'::JSONB,
+
+        created_at TIMESTAMPTZ
+          NOT NULL
+          DEFAULT NOW()
+      )
+    `)
+
+    /*
+     * Application/database-level append-only protection.
+     *
+     * PostgreSQL superusers could still deliberately disable
+     * the trigger, so this is tamper-resistant rather than
+     * mathematically tamper-proof.
+     */
+    await client.query(`
+      CREATE OR REPLACE FUNCTION prevent_audit_log_mutation()
+      RETURNS TRIGGER
+      AS $$
+      BEGIN
+        RAISE EXCEPTION
+          'TRACE-X audit_logs is append-only';
+      END;
+      $$
+      LANGUAGE plpgsql
+    `)
+
+    await client.query(`
+      DROP TRIGGER IF EXISTS audit_logs_append_only
+      ON audit_logs
+    `)
+
+    await client.query(`
+      CREATE TRIGGER audit_logs_append_only
+      BEFORE UPDATE OR DELETE
+      ON audit_logs
+
+      FOR EACH ROW
+      EXECUTE FUNCTION prevent_audit_log_mutation()
+    `)
+
+    /* -----------------------------------------------------
        INDEXES
     ----------------------------------------------------- */
 
@@ -464,10 +604,37 @@ export async function initializeDatabase() {
       WHERE blockchain_tx_hash IS NOT NULL
     `)
 
-    /* -----------------------------------------------------
-       INITIAL SEED DATA
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_custody_events_evidence
+      ON custody_events(
+        evidence_id,
+        sequence
+      )
+    `)
 
-       Only inserted for a completely empty database.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_custody_events_blockchain_status
+      ON custody_events(
+        blockchain_status
+      )
+    `)
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
+      ON audit_logs(
+        created_at DESC
+      )
+    `)
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_evidence_id
+      ON audit_logs(
+        evidence_id
+      )
+    `)
+
+    /* -----------------------------------------------------
+       SEED DATA
     ----------------------------------------------------- */
 
     const caseCountResult =
@@ -636,13 +803,16 @@ export async function initializeDatabase() {
           created_at,
           note
         )
+
         SELECT
           id,
           1,
           hash,
           created_at,
           'Original evidence acquisition'
+
         FROM evidence
+
         WHERE id IN (
           'EV-2026-0124',
           'EV-2026-0123',

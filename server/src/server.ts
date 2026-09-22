@@ -32,6 +32,7 @@ import {
 import {
   anchorEvidenceOnBlockchain,
   getBlockchainStatus,
+  recordCustodyEventOnBlockchain,
   verifyEvidenceOnBlockchain,
 } from "./blockchain"
 
@@ -179,13 +180,26 @@ type EvidenceRecord = {
   updatedAt: string
   versions: EvidenceVersion[]
 
-  blockchainStatus: BlockchainAnchorStatus
-  blockchainVersion: number | null
-  blockchainTransactionHash: string | null
-  blockchainBlockNumber: number | null
-  blockchainContractAddress: string | null
-  blockchainEvidenceKey: string | null
-  blockchainError: string | null
+  blockchainStatus:
+    BlockchainAnchorStatus
+
+  blockchainVersion:
+    number | null
+
+  blockchainTransactionHash:
+    string | null
+
+  blockchainBlockNumber:
+    number | null
+
+  blockchainContractAddress:
+    string | null
+
+  blockchainEvidenceKey:
+    string | null
+
+  blockchainError:
+    string | null
 }
 
 type EvidenceRow = {
@@ -229,6 +243,8 @@ type EvidenceRow = {
 type StoredEvidenceRow = {
   id: string
   hash: string
+  custodian: string
+  case_id: string
 
   storage_key:
     string | null
@@ -258,8 +274,52 @@ type StoredEvidenceRow = {
     string | null
 }
 
+type CustodyAction =
+  | "REGISTERED"
+  | "TRANSFERRED"
+  | "RECEIVED"
+  | "VERIFIED"
+  | "SEALED"
+  | "ARCHIVED"
+
+type CustodyEventRow = {
+  id: number | string
+  evidence_id: string
+  sequence: number
+  action_code: number
+  action: CustodyAction
+  from_custodian: string | null
+  to_custodian: string | null
+  reason: string
+  event_digest: string
+  blockchain_status: BlockchainAnchorStatus
+  blockchain_sequence: number | string | null
+  blockchain_tx_hash: string | null
+  blockchain_block_number: number | string | null
+  blockchain_contract_address: string | null
+  blockchain_evidence_key: string | null
+  blockchain_error: string | null
+  occurred_at: Date | string
+  created_at: Date | string
+}
+
+type CustodyAnchorRow =
+  CustodyEventRow & {
+    case_id: string
+  }
+
+type AuditLogRow = {
+  id: number | string
+  event_type: string
+  evidence_id: string | null
+  case_id: string | null
+  actor: string
+  details: unknown
+  created_at: Date | string
+}
+
 /* =========================================================
-   VALID VALUES
+   CONSTANTS
 ========================================================= */
 
 const VALID_PRIORITIES:
@@ -280,6 +340,12 @@ const VALID_EVIDENCE_TYPES:
     "Video",
     "Other",
   ]
+
+const CUSTODY_ACTION_REGISTERED =
+  1
+
+const CUSTODY_ACTION_TRANSFERRED =
+  2
 
 /* =========================================================
    MULTER STORAGE
@@ -370,6 +436,15 @@ function formatDate(
   )
 }
 
+function formatTimestamp(
+  value:
+    Date | string,
+) {
+  return new Date(
+    value,
+  ).toISOString()
+}
+
 function getErrorMessage(
   error: unknown,
 ) {
@@ -382,6 +457,30 @@ function getErrorMessage(
 
   return "Unknown TRACE-X error."
 }
+
+function sendServerError(
+  response: Response,
+  error: unknown,
+) {
+  console.error(
+    "TRACE-X server error:",
+    error,
+  )
+
+  response
+    .status(500)
+    .json({
+      success:
+        false,
+
+      message:
+        "An internal TRACE-X server error occurred.",
+    })
+}
+
+/* =========================================================
+   DATA MAPPERS
+========================================================= */
 
 function mapCase(
   row: CaseRow,
@@ -508,28 +607,119 @@ function mapEvidence(
   }
 }
 
-function sendServerError(
-  response: Response,
-  error: unknown,
+function mapCustodyEvent(
+  row: CustodyEventRow,
 ) {
-  console.error(
-    "TRACE-X server error:",
-    error,
-  )
+  return {
+    id:
+      Number(
+        row.id,
+      ),
 
-  response
-    .status(500)
-    .json({
-      success:
-        false,
+    evidenceId:
+      row.evidence_id,
 
-      message:
-        "An internal TRACE-X server error occurred.",
-    })
+    sequence:
+      Number(
+        row.sequence,
+      ),
+
+    actionCode:
+      Number(
+        row.action_code,
+      ),
+
+    action:
+      row.action,
+
+    fromCustodian:
+      row.from_custodian,
+
+    toCustodian:
+      row.to_custodian,
+
+    reason:
+      row.reason,
+
+    eventDigest:
+      row.event_digest,
+
+    blockchainStatus:
+      row.blockchain_status,
+
+    blockchainSequence:
+      row.blockchain_sequence ===
+      null
+        ? null
+        : Number(
+            row.blockchain_sequence,
+          ),
+
+    blockchainTransactionHash:
+      row.blockchain_tx_hash,
+
+    blockchainBlockNumber:
+      row.blockchain_block_number ===
+      null
+        ? null
+        : Number(
+            row.blockchain_block_number,
+          ),
+
+    blockchainContractAddress:
+      row.blockchain_contract_address,
+
+    blockchainEvidenceKey:
+      row.blockchain_evidence_key,
+
+    blockchainError:
+      row.blockchain_error,
+
+    occurredAt:
+      formatTimestamp(
+        row.occurred_at,
+      ),
+
+    createdAt:
+      formatTimestamp(
+        row.created_at,
+      ),
+  }
+}
+
+function mapAuditLog(
+  row: AuditLogRow,
+) {
+  return {
+    id:
+      Number(
+        row.id,
+      ),
+
+    eventType:
+      row.event_type,
+
+    evidenceId:
+      row.evidence_id,
+
+    caseId:
+      row.case_id,
+
+    actor:
+      row.actor,
+
+    details:
+      row.details,
+
+    createdAt:
+      formatTimestamp(
+        row.created_at,
+      ),
+  }
 }
 
 /* =========================================================
-   SHA-256 STREAMING
+   SHA-256 FILE HASHING
 ========================================================= */
 
 function calculateFileSHA256(
@@ -580,6 +770,69 @@ function calculateFileSHA256(
       )
     },
   )
+}
+
+/* =========================================================
+   CUSTODY EVENT DIGEST
+========================================================= */
+
+function calculateCustodyDigest(
+  input: {
+    evidenceId: string
+    sequence: number
+    actionCode: number
+    action: CustodyAction
+    fromCustodian: string | null
+    toCustodian: string | null
+    reason: string
+    occurredAt: string
+  },
+) {
+  /*
+   * Canonical JSON object.
+   *
+   * We hash the same explicitly ordered fields every time.
+   */
+  const canonical =
+    JSON.stringify({
+      schema:
+        "trace-x-custody-v1",
+
+      evidenceId:
+        input.evidenceId,
+
+      sequence:
+        input.sequence,
+
+      actionCode:
+        input.actionCode,
+
+      action:
+        input.action,
+
+      fromCustodian:
+        input.fromCustodian,
+
+      toCustodian:
+        input.toCustodian,
+
+      reason:
+        input.reason,
+
+      occurredAt:
+        input.occurredAt,
+    })
+
+  return createHash(
+    "sha256",
+  )
+    .update(
+      canonical,
+      "utf8",
+    )
+    .digest(
+      "hex",
+    )
 }
 
 /* =========================================================
@@ -650,6 +903,49 @@ async function removeFileSafely(
       )
     }
   }
+}
+
+/* =========================================================
+   AUDIT LOG
+========================================================= */
+
+async function appendAuditLog(
+  input: {
+    eventType: string
+    evidenceId: string | null
+    caseId: string | null
+    actor: string
+    details: unknown
+  },
+) {
+  await database.query(
+    `
+      INSERT INTO audit_logs (
+        event_type,
+        evidence_id,
+        case_id,
+        actor,
+        details
+      )
+
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5::JSONB
+      )
+    `,
+    [
+      input.eventType,
+      input.evidenceId,
+      input.caseId,
+      input.actor,
+      JSON.stringify(
+        input.details,
+      ),
+    ],
+  )
 }
 
 /* =========================================================
@@ -858,8 +1154,100 @@ async function fetchEvidenceById(
   )
 }
 
+async function fetchCustodyEvents(
+  evidenceId: string,
+) {
+  const result =
+    await database.query<CustodyEventRow>(
+      `
+        SELECT
+          id,
+          evidence_id,
+          sequence,
+          action_code,
+          action,
+          from_custodian,
+          to_custodian,
+          reason,
+          event_digest,
+          blockchain_status,
+          blockchain_sequence,
+          blockchain_tx_hash,
+          blockchain_block_number,
+          blockchain_contract_address,
+          blockchain_evidence_key,
+          blockchain_error,
+          occurred_at,
+          created_at
+
+        FROM custody_events
+
+        WHERE
+          evidence_id = $1
+
+        ORDER BY
+          sequence ASC
+      `,
+      [
+        evidenceId,
+      ],
+    )
+
+  return result.rows.map(
+    mapCustodyEvent,
+  )
+}
+
+async function fetchCustodyEventById(
+  eventId: number,
+) {
+  const result =
+    await database.query<CustodyEventRow>(
+      `
+        SELECT
+          id,
+          evidence_id,
+          sequence,
+          action_code,
+          action,
+          from_custodian,
+          to_custodian,
+          reason,
+          event_digest,
+          blockchain_status,
+          blockchain_sequence,
+          blockchain_tx_hash,
+          blockchain_block_number,
+          blockchain_contract_address,
+          blockchain_evidence_key,
+          blockchain_error,
+          occurred_at,
+          created_at
+
+        FROM custody_events
+
+        WHERE
+          id = $1
+      `,
+      [
+        eventId,
+      ],
+    )
+
+  if (
+    result.rows.length ===
+    0
+  ) {
+    return null
+  }
+
+  return mapCustodyEvent(
+    result.rows[0],
+  )
+}
+
 /* =========================================================
-   BLOCKCHAIN PERSISTENCE
+   EVIDENCE BLOCKCHAIN PERSISTENCE
 ========================================================= */
 
 async function anchorAndPersistEvidence(
@@ -972,6 +1360,590 @@ async function anchorAndPersistEvidence(
 }
 
 /* =========================================================
+   CUSTODY BLOCKCHAIN PERSISTENCE
+========================================================= */
+
+async function anchorAndPersistCustodyEvent(
+  eventId: number,
+) {
+  const result =
+    await database.query<CustodyAnchorRow>(
+      `
+        SELECT
+          ce.id,
+          ce.evidence_id,
+          ce.sequence,
+          ce.action_code,
+          ce.action,
+          ce.from_custodian,
+          ce.to_custodian,
+          ce.reason,
+          ce.event_digest,
+          ce.blockchain_status,
+          ce.blockchain_sequence,
+          ce.blockchain_tx_hash,
+          ce.blockchain_block_number,
+          ce.blockchain_contract_address,
+          ce.blockchain_evidence_key,
+          ce.blockchain_error,
+          ce.occurred_at,
+          ce.created_at,
+
+          e.case_id
+
+        FROM custody_events ce
+
+        INNER JOIN evidence e
+          ON e.id = ce.evidence_id
+
+        WHERE
+          ce.id = $1
+      `,
+      [
+        eventId,
+      ],
+    )
+
+  if (
+    result.rows.length ===
+    0
+  ) {
+    throw new Error(
+      "Custody event not found.",
+    )
+  }
+
+  const event =
+    result.rows[0]
+
+  if (
+    event.blockchain_status ===
+      "Anchored"
+  ) {
+    return {
+      anchored:
+        true as const,
+
+      alreadyAnchored:
+        true as const,
+    }
+  }
+
+  await database.query(
+    `
+      UPDATE custody_events
+
+      SET
+        blockchain_status = 'Pending',
+        blockchain_error = NULL
+
+      WHERE
+        id = $1
+    `,
+    [
+      eventId,
+    ],
+  )
+
+  try {
+    const anchor =
+      await recordCustodyEventOnBlockchain(
+        event.evidence_id,
+        Number(
+          event.sequence,
+        ),
+        Number(
+          event.action_code,
+        ),
+        event.event_digest,
+      )
+
+    await database.query(
+      `
+        UPDATE custody_events
+
+        SET
+          blockchain_status = 'Anchored',
+
+          blockchain_sequence = $1,
+
+          blockchain_tx_hash = $2,
+
+          blockchain_block_number = $3,
+
+          blockchain_contract_address = $4,
+
+          blockchain_evidence_key = $5,
+
+          blockchain_error = NULL
+
+        WHERE
+          id = $6
+      `,
+      [
+        anchor.sequence,
+        anchor.transactionHash,
+        anchor.blockNumber,
+        anchor.contractAddress,
+        anchor.evidenceKey,
+        eventId,
+      ],
+    )
+
+    await appendAuditLog({
+      eventType:
+        "CUSTODY_EVENT_ANCHORED",
+
+      evidenceId:
+        event.evidence_id,
+
+      caseId:
+        event.case_id,
+
+      actor:
+        event.to_custodian ||
+        event.from_custodian ||
+        "TRACE-X System",
+
+      details: {
+        custodyEventId:
+          eventId,
+
+        sequence:
+          Number(
+            event.sequence,
+          ),
+
+        action:
+          event.action,
+
+        eventDigest:
+          event.event_digest,
+
+        transactionHash:
+          anchor.transactionHash,
+
+        blockNumber:
+          anchor.blockNumber,
+      },
+    })
+
+    return {
+      anchored:
+        true as const,
+
+      alreadyAnchored:
+        false as const,
+
+      anchor,
+    }
+  } catch (error) {
+    const message =
+      getErrorMessage(
+        error,
+      )
+
+    await database.query(
+      `
+        UPDATE custody_events
+
+        SET
+          blockchain_status = 'Failed',
+
+          blockchain_error = $1
+
+        WHERE
+          id = $2
+      `,
+      [
+        message,
+        eventId,
+      ],
+    )
+
+    await appendAuditLog({
+      eventType:
+        "CUSTODY_EVENT_ANCHOR_FAILED",
+
+      evidenceId:
+        event.evidence_id,
+
+      caseId:
+        event.case_id,
+
+      actor:
+        event.to_custodian ||
+        event.from_custodian ||
+        "TRACE-X System",
+
+      details: {
+        custodyEventId:
+          eventId,
+
+        sequence:
+          Number(
+            event.sequence,
+          ),
+
+        action:
+          event.action,
+
+        eventDigest:
+          event.event_digest,
+
+        error:
+          message,
+      },
+    })
+
+    return {
+      anchored:
+        false as const,
+
+      error:
+        message,
+    }
+  }
+}
+
+/* =========================================================
+   INITIAL REGISTRATION CUSTODY EVENT
+========================================================= */
+
+async function ensureRegistrationCustodyEvent(
+  evidenceId: string,
+) {
+  const evidenceResult =
+    await database.query<{
+      id: string
+      case_id: string
+      custodian: string
+      created_at: Date | string
+      blockchain_status: BlockchainAnchorStatus
+    }>(
+      `
+        SELECT
+          id,
+          case_id,
+          custodian,
+          created_at,
+          blockchain_status
+
+        FROM evidence
+
+        WHERE
+          id = $1
+      `,
+      [
+        evidenceId,
+      ],
+    )
+
+  if (
+    evidenceResult.rows.length ===
+    0
+  ) {
+    throw new Error(
+      "Evidence record not found.",
+    )
+  }
+
+  const evidence =
+    evidenceResult.rows[0]
+
+  if (
+    evidence.blockchain_status !==
+    "Anchored"
+  ) {
+    return {
+      anchored:
+        false as const,
+
+      error:
+        "Evidence must be blockchain anchored before its custody chain can begin.",
+    }
+  }
+
+  const existingResult =
+    await database.query<CustodyEventRow>(
+      `
+        SELECT
+          id,
+          evidence_id,
+          sequence,
+          action_code,
+          action,
+          from_custodian,
+          to_custodian,
+          reason,
+          event_digest,
+          blockchain_status,
+          blockchain_sequence,
+          blockchain_tx_hash,
+          blockchain_block_number,
+          blockchain_contract_address,
+          blockchain_evidence_key,
+          blockchain_error,
+          occurred_at,
+          created_at
+
+        FROM custody_events
+
+        WHERE
+          evidence_id = $1
+          AND sequence = 1
+      `,
+      [
+        evidenceId,
+      ],
+    )
+
+  if (
+    existingResult.rows.length >
+    0
+  ) {
+    const existing =
+      existingResult.rows[0]
+
+    if (
+      existing.blockchain_status ===
+      "Anchored"
+    ) {
+      return {
+        anchored:
+          true as const,
+
+        eventId:
+          Number(
+            existing.id,
+          ),
+      }
+    }
+
+    const retry =
+      await anchorAndPersistCustodyEvent(
+        Number(
+          existing.id,
+        ),
+      )
+
+    return {
+      ...retry,
+
+      eventId:
+        Number(
+          existing.id,
+        ),
+    }
+  }
+
+  const occurredAt =
+    new Date(
+      evidence.created_at,
+    ).toISOString()
+
+  const reason =
+    "Evidence registered in TRACE-X and initial custody assigned."
+
+  const digest =
+    calculateCustodyDigest({
+      evidenceId,
+
+      sequence:
+        1,
+
+      actionCode:
+        CUSTODY_ACTION_REGISTERED,
+
+      action:
+        "REGISTERED",
+
+      fromCustodian:
+        null,
+
+      toCustodian:
+        evidence.custodian,
+
+      reason,
+
+      occurredAt,
+    })
+
+  const client =
+    await database.connect()
+
+  let eventId:
+    number | null =
+      null
+
+  try {
+    await client.query(
+      "BEGIN",
+    )
+
+    const insertResult =
+      await client.query<{
+        id: number | string
+      }>(
+        `
+          INSERT INTO custody_events (
+            evidence_id,
+            sequence,
+            action_code,
+            action,
+            from_custodian,
+            to_custodian,
+            reason,
+            event_digest,
+            blockchain_status,
+            occurred_at
+          )
+
+          VALUES (
+            $1,
+            1,
+            $2,
+            'REGISTERED',
+            NULL,
+            $3,
+            $4,
+            $5,
+            'Pending',
+            $6
+          )
+
+          ON CONFLICT (
+            evidence_id,
+            sequence
+          )
+
+          DO NOTHING
+
+          RETURNING
+            id
+        `,
+        [
+          evidenceId,
+          CUSTODY_ACTION_REGISTERED,
+          evidence.custodian,
+          reason,
+          digest,
+          occurredAt,
+        ],
+      )
+
+    if (
+      insertResult.rows.length >
+      0
+    ) {
+      eventId =
+        Number(
+          insertResult
+            .rows[0]
+            .id,
+        )
+
+      await client.query(
+        `
+          INSERT INTO audit_logs (
+            event_type,
+            evidence_id,
+            case_id,
+            actor,
+            details
+          )
+
+          VALUES (
+            'EVIDENCE_REGISTERED',
+            $1,
+            $2,
+            $3,
+            $4::JSONB
+          )
+        `,
+        [
+          evidenceId,
+          evidence.case_id,
+          evidence.custodian,
+          JSON.stringify({
+            custodySequence:
+              1,
+
+            eventDigest:
+              digest,
+
+            initialCustodian:
+              evidence.custodian,
+          }),
+        ],
+      )
+    }
+
+    await client.query(
+      "COMMIT",
+    )
+  } catch (error) {
+    await client.query(
+      "ROLLBACK",
+    )
+
+    throw error
+  } finally {
+    client.release()
+  }
+
+  if (
+    eventId ===
+    null
+  ) {
+    const concurrentResult =
+      await database.query<{
+        id: number | string
+      }>(
+        `
+          SELECT id
+
+          FROM custody_events
+
+          WHERE
+            evidence_id = $1
+            AND sequence = 1
+        `,
+        [
+          evidenceId,
+        ],
+      )
+
+    if (
+      concurrentResult.rows.length ===
+      0
+    ) {
+      throw new Error(
+        "Could not create the initial custody event.",
+      )
+    }
+
+    eventId =
+      Number(
+        concurrentResult
+          .rows[0]
+          .id,
+      )
+  }
+
+  const anchorResult =
+    await anchorAndPersistCustodyEvent(
+      eventId,
+    )
+
+  return {
+    ...anchorResult,
+
+    eventId,
+  }
+}
+
+/* =========================================================
    ROOT
 ========================================================= */
 
@@ -1002,6 +1974,9 @@ app.get(
 
       blockchain:
         "Ethereum-compatible Hardhat network",
+
+      custody:
+        "Enabled",
     })
   },
 )
@@ -1107,6 +2082,14 @@ app.get(
 
         blockchain,
 
+        custody: {
+          enabled:
+            true,
+
+          auditLog:
+            "append-only",
+        },
+
         timestamp:
           new Date().toISOString(),
 
@@ -1125,12 +2108,6 @@ app.get(
         .json({
           success:
             false,
-
-          service:
-            "TRACE-X API",
-
-          status:
-            "dependency_unavailable",
 
           message:
             "TRACE-X database or evidence storage is unavailable.",
@@ -1307,8 +2284,7 @@ app.post(
               $4
             )
 
-            RETURNING
-              id
+            RETURNING id
           `,
           [
             title.trim(),
@@ -1722,7 +2698,7 @@ app.post(
 )
 
 /* =========================================================
-   REAL FILE UPLOAD + AUTOMATIC BLOCKCHAIN ANCHOR
+   REAL FILE UPLOAD
 ========================================================= */
 
 app.post(
@@ -1843,18 +2819,10 @@ app.post(
         return
       }
 
-      /* ---------------------------------------------------
-         AUTHORITATIVE SERVER SHA-256
-      --------------------------------------------------- */
-
       const calculatedHash =
         await calculateFileSHA256(
           uploadedFile.path,
         )
-
-      /* ---------------------------------------------------
-         POSTGRESQL TRANSACTION
-      --------------------------------------------------- */
 
       const client =
         await database.connect()
@@ -1988,15 +2956,24 @@ app.post(
         client.release()
       }
 
-      /* ---------------------------------------------------
-         BLOCKCHAIN ANCHOR
-      --------------------------------------------------- */
-
       const blockchainResult =
         await anchorAndPersistEvidence(
           evidenceId,
           calculatedHash,
         )
+
+      let custodyRegistration:
+        unknown =
+          null
+
+      if (
+        blockchainResult.anchored
+      ) {
+        custodyRegistration =
+          await ensureRegistrationCustodyEvent(
+            evidenceId,
+          )
+      }
 
       const newEvidence =
         await fetchEvidenceById(
@@ -2012,7 +2989,7 @@ app.post(
           message:
             blockchainResult.anchored
               ? "Evidence stored, hashed and blockchain anchored successfully."
-              : "Evidence stored and hashed successfully, but blockchain anchoring failed. The anchor can be retried.",
+              : "Evidence stored and hashed successfully, but blockchain anchoring failed.",
 
           hashSource:
             "server",
@@ -2027,6 +3004,8 @@ app.post(
             blockchainResult.anchored
               ? null
               : blockchainResult.error,
+
+          custodyRegistration,
 
           data:
             newEvidence,
@@ -2050,7 +3029,7 @@ app.post(
 )
 
 /* =========================================================
-   RETRY BLOCKCHAIN ANCHOR
+   RETRY EVIDENCE BLOCKCHAIN ANCHOR
 ========================================================= */
 
 app.post(
@@ -2072,6 +3051,8 @@ app.post(
             SELECT
               id,
               hash,
+              custodian,
+              case_id,
               storage_key,
               storage_provider,
               blockchain_status,
@@ -2123,7 +3104,7 @@ app.post(
               false,
 
             message:
-              "Metadata-only evidence cannot be automatically blockchain anchored because TRACE-X does not possess the original evidence bytes.",
+              "Metadata-only evidence cannot be automatically blockchain anchored.",
           })
 
         return
@@ -2134,6 +3115,10 @@ app.post(
           "Anchored" &&
         record.blockchain_version
       ) {
+        await ensureRegistrationCustodyEvent(
+          record.id,
+        )
+
         const evidence =
           await fetchEvidenceById(
             record.id,
@@ -2161,6 +3146,14 @@ app.post(
           record.id,
           record.hash,
         )
+
+      if (
+        blockchainResult.anchored
+      ) {
+        await ensureRegistrationCustodyEvent(
+          record.id,
+        )
+      }
 
       const evidence =
         await fetchEvidenceById(
@@ -2212,7 +3205,7 @@ app.post(
 )
 
 /* =========================================================
-   DUAL INTEGRITY VERIFICATION
+   FILE + BLOCKCHAIN VERIFICATION
 ========================================================= */
 
 app.post(
@@ -2234,6 +3227,8 @@ app.post(
             SELECT
               id,
               hash,
+              custodian,
+              case_id,
               storage_key,
               storage_provider,
               blockchain_status,
@@ -2286,7 +3281,7 @@ app.post(
               false,
 
             message:
-              "This evidence record does not have a locally stored evidence file. Older metadata-only records cannot be rehashed.",
+              "This evidence record does not have a locally stored evidence file.",
           })
 
         return
@@ -2296,10 +3291,6 @@ app.post(
         resolveStoredEvidencePath(
           record.storage_key,
         )
-
-      /* ---------------------------------------------------
-         CHECK THAT FILE STILL EXISTS
-      --------------------------------------------------- */
 
       try {
         await stat(
@@ -2363,10 +3354,6 @@ app.post(
         throw error
       }
 
-      /* ---------------------------------------------------
-         CHECK 1: FILE VS DATABASE
-      --------------------------------------------------- */
-
       const currentHash =
         await calculateFileSHA256(
           storedPath,
@@ -2398,10 +3385,6 @@ app.post(
           record.id,
         ],
       )
-
-      /* ---------------------------------------------------
-         CHECK 2: BLOCKCHAIN
-      --------------------------------------------------- */
 
       let blockchainChecked =
         false
@@ -2539,6 +3522,830 @@ app.post(
 )
 
 /* =========================================================
+   CUSTODY HISTORY
+========================================================= */
+
+app.get(
+  "/api/evidence/:id/custody",
+
+  async (
+    request:
+      Request<{
+        id: string
+      }>,
+
+    response:
+      Response,
+  ) => {
+    try {
+      const evidence =
+        await fetchEvidenceById(
+          request.params.id,
+        )
+
+      if (
+        !evidence
+      ) {
+        response
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Evidence record not found.",
+          })
+
+        return
+      }
+
+      const custodyEvents =
+        await fetchCustodyEvents(
+          request.params.id,
+        )
+
+      response.json({
+        success:
+          true,
+
+        evidenceId:
+          request.params.id,
+
+        currentCustodian:
+          evidence.custodian,
+
+        count:
+          custodyEvents.length,
+
+        data:
+          custodyEvents,
+      })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
+    }
+  },
+)
+
+/* =========================================================
+   CUSTODY TRANSFER
+========================================================= */
+
+app.post(
+  "/api/evidence/:id/transfer",
+
+  async (
+    request:
+      Request<{
+        id: string
+      }>,
+
+    response:
+      Response,
+  ) => {
+    try {
+      const {
+        toCustodian,
+        reason,
+      } =
+        request.body
+
+      if (
+        typeof toCustodian !==
+          "string" ||
+        !toCustodian.trim()
+      ) {
+        response
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Destination custodian is required.",
+          })
+
+        return
+      }
+
+      if (
+        typeof reason !==
+          "string" ||
+        !reason.trim()
+      ) {
+        response
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Transfer reason is required.",
+          })
+
+        return
+      }
+
+      /*
+       * Every blockchain-backed custody chain should begin
+       * with the initial registration event.
+       */
+      const registration =
+        await ensureRegistrationCustodyEvent(
+          request.params.id,
+        )
+
+      if (
+        !registration.anchored
+      ) {
+        response
+          .status(503)
+          .json({
+            success:
+              false,
+
+            message:
+              "The initial custody registration event is not blockchain anchored. Resolve that before transferring custody.",
+
+            blockchainError:
+              "error" in registration
+                ? registration.error
+                : null,
+          })
+
+        return
+      }
+
+      /*
+       * Don't allow new custody events to jump past a failed
+       * earlier event.
+       */
+      const unresolvedResult =
+        await database.query<{
+          count: string
+        }>(
+          `
+            SELECT
+              COUNT(*)::TEXT AS count
+
+            FROM custody_events
+
+            WHERE
+              evidence_id = $1
+              AND blockchain_status <> 'Anchored'
+          `,
+          [
+            request.params.id,
+          ],
+        )
+
+      if (
+        Number(
+          unresolvedResult
+            .rows[0]
+            .count,
+        ) > 0
+      ) {
+        response
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "A previous custody event has not been blockchain anchored. Retry that event before creating another transfer.",
+          })
+
+        return
+      }
+
+      const client =
+        await database.connect()
+
+      let custodyEventId =
+        0
+
+      let newSequence =
+        0
+
+      let fromCustodian =
+        ""
+
+      let caseId =
+        ""
+
+      try {
+        await client.query(
+          "BEGIN",
+        )
+
+        const evidenceResult =
+          await client.query<{
+            id: string
+            case_id: string
+            custodian: string
+          }>(
+            `
+              SELECT
+                id,
+                case_id,
+                custodian
+
+              FROM evidence
+
+              WHERE
+                id = $1
+
+              FOR UPDATE
+            `,
+            [
+              request.params.id,
+            ],
+          )
+
+        if (
+          evidenceResult.rows.length ===
+          0
+        ) {
+          await client.query(
+            "ROLLBACK",
+          )
+
+          response
+            .status(404)
+            .json({
+              success:
+                false,
+
+              message:
+                "Evidence record not found.",
+            })
+
+          return
+        }
+
+        fromCustodian =
+          evidenceResult
+            .rows[0]
+            .custodian
+
+        caseId =
+          evidenceResult
+            .rows[0]
+            .case_id
+
+        const destination =
+          toCustodian.trim()
+
+        if (
+          destination.toLowerCase() ===
+          fromCustodian
+            .trim()
+            .toLowerCase()
+        ) {
+          await client.query(
+            "ROLLBACK",
+          )
+
+          response
+            .status(400)
+            .json({
+              success:
+                false,
+
+              message:
+                "The destination custodian must be different from the current custodian.",
+            })
+
+          return
+        }
+
+        const sequenceResult =
+          await client.query<{
+            next_sequence: number
+          }>(
+            `
+              SELECT
+                (
+                  COALESCE(
+                    MAX(sequence),
+                    0
+                  ) + 1
+                )::INTEGER
+                  AS next_sequence
+
+              FROM custody_events
+
+              WHERE
+                evidence_id = $1
+            `,
+            [
+              request.params.id,
+            ],
+          )
+
+        newSequence =
+          Number(
+            sequenceResult
+              .rows[0]
+              .next_sequence,
+          )
+
+        const timeResult =
+          await client.query<{
+            occurred_at: Date
+          }>(`
+            SELECT
+              NOW() AS occurred_at
+          `)
+
+        const occurredAt =
+          timeResult
+            .rows[0]
+            .occurred_at
+            .toISOString()
+
+        const transferReason =
+          reason.trim()
+
+        const eventDigest =
+          calculateCustodyDigest({
+            evidenceId:
+              request.params.id,
+
+            sequence:
+              newSequence,
+
+            actionCode:
+              CUSTODY_ACTION_TRANSFERRED,
+
+            action:
+              "TRANSFERRED",
+
+            fromCustodian,
+
+            toCustodian:
+              destination,
+
+            reason:
+              transferReason,
+
+            occurredAt,
+          })
+
+        const insertResult =
+          await client.query<{
+            id: number | string
+          }>(
+            `
+              INSERT INTO custody_events (
+                evidence_id,
+                sequence,
+                action_code,
+                action,
+                from_custodian,
+                to_custodian,
+                reason,
+                event_digest,
+                blockchain_status,
+                occurred_at
+              )
+
+              VALUES (
+                $1,
+                $2,
+                $3,
+                'TRANSFERRED',
+                $4,
+                $5,
+                $6,
+                $7,
+                'Pending',
+                $8
+              )
+
+              RETURNING
+                id
+            `,
+            [
+              request.params.id,
+              newSequence,
+              CUSTODY_ACTION_TRANSFERRED,
+              fromCustodian,
+              destination,
+              transferReason,
+              eventDigest,
+              occurredAt,
+            ],
+          )
+
+        custodyEventId =
+          Number(
+            insertResult
+              .rows[0]
+              .id,
+          )
+
+        await client.query(
+          `
+            UPDATE evidence
+
+            SET
+              custodian = $1,
+              updated_at = NOW()
+
+            WHERE
+              id = $2
+          `,
+          [
+            destination,
+            request.params.id,
+          ],
+        )
+
+        await client.query(
+          `
+            INSERT INTO audit_logs (
+              event_type,
+              evidence_id,
+              case_id,
+              actor,
+              details
+            )
+
+            VALUES (
+              'CUSTODY_TRANSFER_RECORDED',
+              $1,
+              $2,
+              $3,
+              $4::JSONB
+            )
+          `,
+          [
+            request.params.id,
+            caseId,
+            fromCustodian,
+            JSON.stringify({
+              custodyEventId,
+
+              sequence:
+                newSequence,
+
+              fromCustodian,
+
+              toCustodian:
+                destination,
+
+              reason:
+                transferReason,
+
+              eventDigest,
+            }),
+          ],
+        )
+
+        await client.query(
+          "COMMIT",
+        )
+      } catch (error) {
+        try {
+          await client.query(
+            "ROLLBACK",
+          )
+        } catch {
+          // Ignore rollback failure.
+        }
+
+        throw error
+      } finally {
+        client.release()
+      }
+
+      /*
+       * The operational transfer has already been recorded.
+       * Blockchain anchoring happens after PostgreSQL commit.
+       */
+      const blockchainResult =
+        await anchorAndPersistCustodyEvent(
+          custodyEventId,
+        )
+
+      const event =
+        await fetchCustodyEventById(
+          custodyEventId,
+        )
+
+      const evidence =
+        await fetchEvidenceById(
+          request.params.id,
+        )
+
+      response
+        .status(201)
+        .json({
+          success:
+            true,
+
+          message:
+            blockchainResult.anchored
+              ? "Custody transfer recorded and blockchain anchored successfully."
+              : "Custody transfer was recorded, but blockchain anchoring failed. Retry the custody event before making another transfer.",
+
+          blockchainAnchored:
+            blockchainResult.anchored,
+
+          blockchainError:
+            blockchainResult.anchored
+              ? null
+              : blockchainResult.error,
+
+          data: {
+            custodyEvent:
+              event,
+
+            evidence,
+          },
+        })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
+    }
+  },
+)
+
+/* =========================================================
+   RETRY CUSTODY BLOCKCHAIN EVENT
+========================================================= */
+
+app.post(
+  "/api/custody/:id/anchor",
+
+  async (
+    request:
+      Request<{
+        id: string
+      }>,
+
+    response:
+      Response,
+  ) => {
+    try {
+      const eventId =
+        Number(
+          request.params.id,
+        )
+
+      if (
+        !Number.isInteger(
+          eventId,
+        ) ||
+        eventId <= 0
+      ) {
+        response
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Invalid custody event ID.",
+          })
+
+        return
+      }
+
+      const eventResult =
+        await database.query<CustodyEventRow>(
+          `
+            SELECT
+              id,
+              evidence_id,
+              sequence,
+              action_code,
+              action,
+              from_custodian,
+              to_custodian,
+              reason,
+              event_digest,
+              blockchain_status,
+              blockchain_sequence,
+              blockchain_tx_hash,
+              blockchain_block_number,
+              blockchain_contract_address,
+              blockchain_evidence_key,
+              blockchain_error,
+              occurred_at,
+              created_at
+
+            FROM custody_events
+
+            WHERE
+              id = $1
+          `,
+          [
+            eventId,
+          ],
+        )
+
+      if (
+        eventResult.rows.length ===
+        0
+      ) {
+        response
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Custody event not found.",
+          })
+
+        return
+      }
+
+      const event =
+        eventResult.rows[0]
+
+      const earlierUnresolved =
+        await database.query<{
+          count: string
+        }>(
+          `
+            SELECT
+              COUNT(*)::TEXT AS count
+
+            FROM custody_events
+
+            WHERE
+              evidence_id = $1
+              AND sequence < $2
+              AND blockchain_status <> 'Anchored'
+          `,
+          [
+            event.evidence_id,
+            event.sequence,
+          ],
+        )
+
+      if (
+        Number(
+          earlierUnresolved
+            .rows[0]
+            .count,
+        ) > 0
+      ) {
+        response
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "An earlier custody event must be blockchain anchored first.",
+          })
+
+        return
+      }
+
+      const blockchainResult =
+        await anchorAndPersistCustodyEvent(
+          eventId,
+        )
+
+      const updatedEvent =
+        await fetchCustodyEventById(
+          eventId,
+        )
+
+      if (
+        !blockchainResult.anchored
+      ) {
+        response
+          .status(503)
+          .json({
+            success:
+              false,
+
+            message:
+              "Custody blockchain anchoring failed.",
+
+            blockchainError:
+              blockchainResult.error,
+
+            data:
+              updatedEvent,
+          })
+
+        return
+      }
+
+      response.json({
+        success:
+          true,
+
+        message:
+          "Custody event blockchain anchor is complete.",
+
+        data:
+          updatedEvent,
+      })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
+    }
+  },
+)
+
+/* =========================================================
+   AUDIT LOG
+========================================================= */
+
+app.get(
+  "/api/audit",
+
+  async (
+    request:
+      Request,
+
+    response:
+      Response,
+  ) => {
+    try {
+      const requestedLimit =
+        Number(
+          request.query.limit,
+        )
+
+      const limit =
+        Number.isInteger(
+          requestedLimit,
+        )
+          ? Math.min(
+              Math.max(
+                requestedLimit,
+                1,
+              ),
+              500,
+            )
+          : 100
+
+      const result =
+        await database.query<AuditLogRow>(
+          `
+            SELECT
+              id,
+              event_type,
+              evidence_id,
+              case_id,
+              actor,
+              details,
+              created_at
+
+            FROM audit_logs
+
+            ORDER BY
+              created_at DESC,
+              id DESC
+
+            LIMIT $1
+          `,
+          [
+            limit,
+          ],
+        )
+
+      const logs =
+        result.rows.map(
+          mapAuditLog,
+        )
+
+      response.json({
+        success:
+          true,
+
+        count:
+          logs.length,
+
+        data:
+          logs,
+      })
+    } catch (error) {
+      sendServerError(
+        response,
+        error,
+      )
+    }
+  },
+)
+
+/* =========================================================
    API OVERVIEW
 ========================================================= */
 
@@ -2556,7 +4363,7 @@ app.get(
         "TRACE-X",
 
       version:
-        "0.5.0",
+        "0.6.0",
 
       database:
         "PostgreSQL",
@@ -2567,6 +4374,9 @@ app.get(
       blockchain:
         "TRACE-X Evidence Registry",
 
+      custody:
+        "Blockchain-anchored chain of custody",
+
       endpoints: {
         health:
           "GET /api/health",
@@ -2574,29 +4384,32 @@ app.get(
         cases:
           "GET /api/cases",
 
-        caseById:
-          "GET /api/cases/:id",
-
         createCase:
           "POST /api/cases",
 
         evidence:
           "GET /api/evidence",
 
-        evidenceById:
-          "GET /api/evidence/:id",
-
-        metadataOnlyEvidence:
-          "POST /api/evidence",
-
         uploadEvidence:
           "POST /api/evidence/upload",
 
-        retryBlockchainAnchor:
+        anchorEvidence:
           "POST /api/evidence/:id/anchor",
 
         verifyEvidence:
           "POST /api/evidence/:id/verify",
+
+        custodyHistory:
+          "GET /api/evidence/:id/custody",
+
+        custodyTransfer:
+          "POST /api/evidence/:id/transfer",
+
+        retryCustodyAnchor:
+          "POST /api/custody/:id/anchor",
+
+        audit:
+          "GET /api/audit",
       },
     })
   },
@@ -2741,7 +4554,11 @@ async function startServer() {
     )
 
     console.log(
-      "Preparing off-chain evidence storage...",
+      "Chain of custody tables: READY",
+    )
+
+    console.log(
+      "Append-only audit log: READY",
     )
 
     await ensureEvidenceStorage()
@@ -2749,10 +4566,6 @@ async function startServer() {
     console.log(
       "Evidence storage: READY",
     )
-
-    /* -----------------------------------------------------
-       BLOCKCHAIN STARTUP CHECK
-    ----------------------------------------------------- */
 
     try {
       const blockchainStatus =
@@ -2783,10 +4596,6 @@ async function startServer() {
           error,
         ),
       )
-
-      console.warn(
-        "Evidence can still be stored. Blockchain anchoring will be marked Failed until retried.",
-      )
     }
 
     console.log(
@@ -2805,11 +4614,7 @@ async function startServer() {
         )
 
         console.log(
-          "Database: PostgreSQL",
-        )
-
-        console.log(
-          "Evidence storage: Local off-chain",
+          "Chain of custody: ENABLED",
         )
 
         console.log(
@@ -2835,23 +4640,11 @@ async function startServer() {
       "======================================",
     )
 
-    console.error(
-      "TRACE-X could not initialize PostgreSQL or local storage.",
-    )
-
     console.error("")
     console.error(
       error,
     )
     console.error("")
-
-    console.error(
-      "Check PostgreSQL and server/.env.",
-    )
-
-    console.error(
-      "======================================",
-    )
   }
 }
 
