@@ -30,3 +30,10 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+
+## 📂 Project Resources
+
+Access the project presentation and website prototype demo using the link below:
+
+- **Project Presentation (PPT) & Website Prototype Demo:** [View Project Resources on Google Drive](https://drive.google.com/drive/folders/1fZ8AOHIVYHx8s1VnzkRxZxX_-JJZpzmS?usp=drive_link)
